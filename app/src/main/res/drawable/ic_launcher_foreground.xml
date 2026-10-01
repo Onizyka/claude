@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Стилизованная стойка с тремя серверами -->
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M33,31h42a3,3 0 0 1 3,3v9a3,3 0 0 1 -3,3h-42a3,3 0 0 1 -3,-3v-9a3,3 0 0 1 3,-3z" />
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M33,49.5h42a3,3 0 0 1 3,3v9a3,3 0 0 1 -3,3h-42a3,3 0 0 1 -3,-3v-9a3,3 0 0 1 3,-3z" />
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M33,68h42a3,3 0 0 1 3,3v9a3,3 0 0 1 -3,3h-42a3,3 0 0 1 -3,-3v-9a3,3 0 0 1 3,-3z" />
+    <path android:fillColor="#FF56C7DA"
+        android:pathData="M35,38.5a2.5,2.5 0 1 0 5,0a2.5,2.5 0 1 0 -5,0z" />
+    <path android:fillColor="#FF56C7DA"
+        android:pathData="M35,57a2.5,2.5 0 1 0 5,0a2.5,2.5 0 1 0 -5,0z" />
+    <path android:fillColor="#FF6CACE4"
+        android:pathData="M35,75.5a2.5,2.5 0 1 0 5,0a2.5,2.5 0 1 0 -5,0z" />
+    <path android:fillColor="#FF025EA1"
+        android:pathData="M46,37.5h26v2h-26z M46,56h26v2h-26z M46,74.5h26v2h-26z" />
+</vector>
