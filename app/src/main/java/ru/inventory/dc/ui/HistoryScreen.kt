@@ -20,6 +20,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Delete
@@ -183,6 +184,7 @@ private fun RecordCard(
             record.locationLine().takeIf { it.isNotBlank() }?.let { IconLine(Icons.Filled.LocationOn, it) }
             record.mgmtIp.takeIf { it.isNotBlank() }?.let { IconLine(Icons.Filled.Lan, "MGMT: $it") }
             if (record.serials.isNotEmpty()) IconLine(Icons.Filled.QrCode2, "S/N: " + record.serials.joinToString(", "))
+            if (record.photos.isNotEmpty()) IconLine(Icons.Filled.PhotoCamera, "Фото: ${record.photos.size}")
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     formatDateTime(record.updatedAt),

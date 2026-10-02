@@ -1,6 +1,8 @@
 package ru.inventory.dc.ui
 
 import android.app.Application
+import android.net.Uri
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -10,10 +12,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ru.inventory.dc.data.EquipmentRecord
+import ru.inventory.dc.data.ModelPreset
+import ru.inventory.dc.data.PhotoStore
+import ru.inventory.dc.data.Placement
+import ru.inventory.dc.data.PlacementRepository
 import ru.inventory.dc.data.PortConnection
 import ru.inventory.dc.data.RecordRepository
 import ru.inventory.dc.data.SendStatus
@@ -22,30 +30,55 @@ import ru.inventory.dc.data.SmtpSettings
 import ru.inventory.dc.data.content
 import ru.inventory.dc.data.forEditing
 import ru.inventory.dc.data.formatDateTime
-import ru.inventory.dc.data.hasData
+import ru.inventory.dc.data.hasOwnData
 import ru.inventory.dc.data.normalized
 import ru.inventory.dc.mail.MailSender
 import ru.inventory.dc.mail.ReportBuilder
 
+@OptIn(kotlinx.coroutines.FlowPreview::class)
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private val recordRepo = RecordRepository(app)
     private val settingsRepo = SettingsRepository(app)
+    private val placementRepo = PlacementRepository(app)
+    val photoStore = PhotoStore(app)
 
     val records: StateFlow<List<EquipmentRecord>> = recordRepo.records
     val settings: StateFlow<SmtpSettings> = settingsRepo.settings
+    val placement: StateFlow<Placement> = placementRepo.placement
 
-    /** Запись, открытая в редакторе. */
-    var draft by mutableStateOf(EquipmentRecord.empty())
+    /** Запись, открытая в редакторе. Восстанавливается после перезапуска приложения. */
+    var draft by mutableStateOf(recordRepo.loadDraft()?.forEditing() ?: blankDraft(keepRack = false))
         private set
 
     var sending by mutableStateOf(false)
         private set
 
+    var processingPhotos by mutableStateOf(false)
+        private set
+
+    init {
+        // Автосохранение черновика: данные не теряются, даже если система выгрузит приложение
+        // (например, пока открыта камера).
+        viewModelScope.launch {
+            snapshotFlow { draft }.drop(1).debounce(400).collect { recordRepo.saveDraftFile(it) }
+        }
+        viewModelScope.launch {
+            val used = records.value.flatMap { it.photos }.toSet() + draft.photos
+            photoStore.cleanup(keep = used)
+        }
+    }
+
+    private fun blankDraft(keepRack: Boolean, previous: EquipmentRecord? = null): EquipmentRecord {
+        val p = placementRepo.placement.value
+        val rack = if (keepRack && previous != null && previous.rack.isNotBlank()) previous.rack else p.rack
+        return EquipmentRecord.empty().copy(site = p.site, room = p.hall, rack = rack)
+    }
+
     private val _messages = Channel<String>(Channel.BUFFERED)
     val messages: Flow<String> = _messages.receiveAsFlow()
 
-    private fun post(message: String) {
+    fun post(message: String) {
         _messages.trySend(message)
     }
 
@@ -55,12 +88,45 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         draft = transform(draft)
     }
 
-    /** Новая запись; при [keepLocation] сохраняются площадка, помещение и стойка. */
-    fun newRecord(keepLocation: Boolean) {
-        val old = draft
-        val fresh = EquipmentRecord.empty()
-        draft = if (keepLocation) fresh.copy(site = old.site, room = old.room, rack = old.rack) else fresh
+    /** Новая запись: ЦОД и машзал берутся из места установки; [keepRack] — оставить стойку. */
+    fun newRecord(keepRack: Boolean) {
+        draft = blankDraft(keepRack, previous = draft)
     }
+
+    // ---------- Место установки ----------
+
+    fun setPlacement(p: Placement) {
+        placementRepo.save(p)
+        val saved = placementRepo.placement.value
+        updateDraft { it.copy(site = saved.site, room = saved.hall, rack = saved.rack.ifBlank { it.rack }) }
+    }
+
+    // ---------- Модель из справочника ----------
+
+    fun applyModel(preset: ModelPreset) = updateDraft { r ->
+        r.copy(
+            model = preset.name,
+            type = r.type.ifBlank { preset.type },
+            heightU = preset.heightU?.toString() ?: r.heightU,
+        )
+    }
+
+    // ---------- Фото ----------
+
+    fun newCaptureUri(): Uri = photoStore.newCaptureUri()
+
+    fun addPhotos(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        viewModelScope.launch {
+            processingPhotos = true
+            val names = uris.mapNotNull { photoStore.import(it) }
+            processingPhotos = false
+            if (names.isNotEmpty()) updateDraft { it.copy(photos = it.photos + names) }
+            if (names.size < uris.size) post("Не удалось добавить фото: ${uris.size - names.size} шт.")
+        }
+    }
+
+    fun removePhoto(name: String) = updateDraft { r -> r.copy(photos = r.photos - name) }
 
     fun openRecord(record: EquipmentRecord) {
         draft = record.forEditing()
@@ -119,7 +185,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun saveDraft() {
         val record = draft.normalized()
-        if (!record.hasData()) {
+        if (!record.hasOwnData()) {
             post("Форма пустая — нечего сохранять")
             return
         }
@@ -140,14 +206,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun send() {
         val record = draft.normalized()
-        if (!record.hasData()) {
+        if (!record.hasOwnData()) {
             post("Заполните хотя бы одно поле")
             return
         }
         deliver(record) { saved, success ->
             if (success) {
                 // Следующее устройство обычно ставят в ту же стойку — место оставляем.
-                newRecord(keepLocation = true)
+                newRecord(keepRack = true)
             } else if (draft.id == saved.id) {
                 draft = saved.forEditing()
             }
@@ -174,9 +240,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 runCatching {
                     MailSender.send(
                         settings = smtp,
-                        subject = ReportBuilder.subject(record, smtp.subjectPrefix),
+                        subject = ReportBuilder.subject(record, smtp.subjectPrefix, now),
                         text = ReportBuilder.text(record, now),
                         html = ReportBuilder.html(record, now),
+                        attachments = record.photos.map(photoStore::file),
                     )
                 }
             }
@@ -197,7 +264,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun deleteRecord(id: String) {
         viewModelScope.launch {
             recordRepo.delete(id)
-            if (draft.id == id) newRecord(keepLocation = true)
+            if (draft.id == id) newRecord(keepRack = true)
             post("Запись удалена")
         }
     }

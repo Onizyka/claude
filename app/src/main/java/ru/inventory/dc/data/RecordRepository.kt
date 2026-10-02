@@ -38,6 +38,25 @@ class RecordRepository(context: Context) {
         }
     }
 
+    // ---------- Черновик: сохраняется автоматически, чтобы не потерять данные ----------
+
+    private val draftFile = File(context.filesDir, "draft.json")
+
+    fun loadDraft(): EquipmentRecord? = try {
+        if (draftFile.exists()) json.decodeFromString(EquipmentRecord.serializer(), draftFile.readText()) else null
+    } catch (e: Exception) {
+        Log.w(TAG, "Не удалось прочитать черновик", e)
+        null
+    }
+
+    suspend fun saveDraftFile(record: EquipmentRecord) = withContext(Dispatchers.IO) {
+        try {
+            draftFile.writeText(json.encodeToString(EquipmentRecord.serializer(), record))
+        } catch (e: Exception) {
+            Log.w(TAG, "Не удалось сохранить черновик", e)
+        }
+    }
+
     suspend fun upsert(record: EquipmentRecord) = mutate { list ->
         val index = list.indexOfFirst { it.id == record.id }
         if (index >= 0) list.toMutableList().also { it[index] = record } else list + record

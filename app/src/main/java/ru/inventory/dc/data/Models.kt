@@ -39,7 +39,7 @@ data class EquipmentRecord(
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = createdAt,
 
-    // Размещение
+    // Размещение: site — ЦОД, room — машзал
     val site: String = "",
     val room: String = "",
     val rack: String = "",
@@ -61,6 +61,8 @@ data class EquipmentRecord(
     val serials: List<String> = emptyList(),
     val connections: List<PortConnection> = emptyList(),
     val comment: String = "",
+    /** Имена файлов фотографий в [PhotoStore]. */
+    val photos: List<String> = emptyList(),
 
     val status: SendStatus = SendStatus.DRAFT,
     val sentAt: Long? = null,
@@ -103,7 +105,8 @@ fun EquipmentRecord.forEditing(): EquipmentRecord = copy(serials = serials.ifEmp
 fun EquipmentRecord.hasData(): Boolean =
     textFields().any { it.isNotBlank() } ||
         serials.any { it.isNotBlank() } ||
-        connections.any { !it.isBlank() }
+        connections.any { !it.isBlank() } ||
+        photos.isNotEmpty()
 
 /** Содержимое записи без служебных полей — для сравнения «изменилось ли». */
 fun EquipmentRecord.content(): EquipmentRecord =
@@ -117,7 +120,7 @@ fun EquipmentRecord.displayTitle(): String =
 
 fun EquipmentRecord.locationLine(): String = listOfNotNull(
     site.takeIf { it.isNotBlank() },
-    room.takeIf { it.isNotBlank() },
+    room.takeIf { it.isNotBlank() }?.let(::hallLabel),
     rack.takeIf { it.isNotBlank() }?.let { "Стойка $it" },
     unit.takeIf { it.isNotBlank() }?.let { u ->
         val height = heightU.takeIf { it.isNotBlank() }?.let { " (${it}U)" }.orEmpty()
@@ -150,3 +153,6 @@ fun formatDateTime(millis: Long): String =
     SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.forLanguageTag("ru")).format(Date(millis))
 
 val EQUIPMENT_TYPES = listOf("Сервер", "Коммутатор", "СХД", "Маршрутизатор", "Межсетевой экран", "ИБП", "PDU", "Другое")
+
+/** Есть ли данные помимо места установки (ЦОД/машзал/стойка подставляются автоматически). */
+fun EquipmentRecord.hasOwnData(): Boolean = copy(site = "", room = "", rack = "").hasData()

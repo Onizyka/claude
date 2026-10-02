@@ -144,3 +144,47 @@ private object SecretCipher {
         }
     }
 }
+
+/** Текущее место установки: задаётся один раз для серии устройств. */
+data class Placement(
+    val site: String = "",
+    val hall: String = "",
+    val rack: String = "",
+    /** Пользователь уже проходил экран выбора места. */
+    val chosen: Boolean = false,
+) {
+    fun summary(): String = listOf(site, hallLabel(hall), rack.takeIf { it.isNotBlank() }?.let { "Стойка $it" }.orEmpty())
+        .filter { it.isNotBlank() }
+        .joinToString(" · ")
+}
+
+class PlacementRepository(context: Context) {
+
+    private val prefs = context.getSharedPreferences("placement", Context.MODE_PRIVATE)
+
+    private val _placement = MutableStateFlow(
+        Placement(
+            site = prefs.getString("site", null).orEmpty(),
+            hall = prefs.getString("hall", null).orEmpty(),
+            rack = prefs.getString("rack", null).orEmpty(),
+            chosen = prefs.getBoolean("chosen", false),
+        )
+    )
+    val placement: StateFlow<Placement> = _placement.asStateFlow()
+
+    fun save(placement: Placement) {
+        val value = placement.copy(
+            site = placement.site.trim(),
+            hall = placement.hall.trim(),
+            rack = placement.rack.trim(),
+            chosen = true,
+        )
+        prefs.edit()
+            .putString("site", value.site)
+            .putString("hall", value.hall)
+            .putString("rack", value.rack)
+            .putBoolean("chosen", true)
+            .apply()
+        _placement.value = value
+    }
+}

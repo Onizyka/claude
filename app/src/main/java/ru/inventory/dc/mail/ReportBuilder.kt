@@ -14,8 +14,8 @@ object ReportBuilder {
         Section(
             "Размещение",
             listOf(
-                "Площадка / ЦОД" to r.site,
-                "Помещение" to r.room,
+                "ЦОД" to r.site,
+                "Машзал" to r.room,
                 "Стойка" to r.rack,
                 "Юнит" to r.unit,
                 "Высота, U" to r.heightU,
@@ -49,21 +49,22 @@ object ReportBuilder {
         .map { section -> section.copy(rows = section.rows.filter { it.second.isNotBlank() }) }
         .filter { it.rows.isNotEmpty() }
 
-    fun subject(r: EquipmentRecord, prefix: String): String {
+    /** Тема: префикс, оборудование и дата/время. Место установки — только в теле письма. */
+    fun subject(r: EquipmentRecord, prefix: String, timestamp: Long): String {
         val equipment = listOf(r.type, listOf(r.vendor, r.model).filter { it.isNotBlank() }.joinToString(" "))
             .filter { it.isNotBlank() }
             .joinToString(" ")
             .ifBlank { r.hostname }
-        val body = listOf(equipment, r.locationLine())
-            .filter { it.isNotBlank() }
-            .joinToString(" · ")
             .ifBlank { "Новое оборудование" }
-        return listOf(prefix.trim(), body).filter { it.isNotBlank() }.joinToString(" ")
+        return listOf(prefix.trim(), equipment, "·", formatDateTime(timestamp))
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
     }
 
     fun text(r: EquipmentRecord, timestamp: Long): String = buildString {
         appendLine("ИНВЕНТАРИЗАЦИЯ ОБОРУДОВАНИЯ")
         appendLine("${r.displayTitle()} — ${formatDateTime(timestamp)}")
+        r.locationLine().takeIf { it.isNotBlank() }?.let { appendLine("Место: $it") }
         sections(r).forEach { section ->
             appendLine()
             appendLine("== ${section.title} ==")
@@ -78,6 +79,11 @@ object ReportBuilder {
                 val note = c.note.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
                 appendLine("${i + 1}. $local → $remote$note")
             }
+        }
+        if (r.photos.isNotEmpty()) {
+            appendLine()
+            appendLine("== Фотографии ==")
+            appendLine("Во вложении: ${r.photos.size} шт.")
         }
         if (r.comment.isNotBlank()) {
             appendLine()
@@ -96,6 +102,9 @@ object ReportBuilder {
         append("<div style=\"font-size:12px;letter-spacing:2px;text-transform:uppercase;opacity:.8\">Инвентаризация оборудования</div>")
         append("<div style=\"font-size:20px;font-weight:bold;margin-top:6px\">").append(esc(r.displayTitle())).append("</div>")
         append("<div style=\"font-size:13px;opacity:.85;margin-top:4px\">").append(esc(formatDateTime(timestamp))).append("</div>")
+        r.locationLine().takeIf { it.isNotBlank() }?.let {
+            append("<div style=\"font-size:14px;margin-top:8px;font-weight:bold\">").append(esc(it)).append("</div>")
+        }
         append("</td></tr>")
 
         sections(r).forEach { section ->
@@ -129,6 +138,11 @@ object ReportBuilder {
         if (r.comment.isNotBlank()) {
             appendSectionTitle("Комментарий")
             append("<div style=\"font-size:14px;margin-top:8px;white-space:pre-wrap\">").append(esc(r.comment)).append("</div></td></tr>")
+        }
+
+        if (r.photos.isNotEmpty()) {
+            appendSectionTitle("Фотографии")
+            append("<div style=\"font-size:14px;margin-top:8px\">Во вложении: ").append(r.photos.size).append(" шт.</div></td></tr>")
         }
 
         append("<tr><td style=\"padding:20px 24px;font-size:11px;color:#6E7782\">Сформировано приложением «Инвентаризация ЦОД»</td></tr>")

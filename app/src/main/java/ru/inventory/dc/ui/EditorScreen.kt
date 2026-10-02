@@ -53,6 +53,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -67,9 +68,11 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import ru.inventory.dc.data.EQUIPMENT_TYPES
 import ru.inventory.dc.data.PortConnection
+import ru.inventory.dc.data.VENDORS
+import ru.inventory.dc.data.findVendor
 import ru.inventory.dc.data.SendStatus
 import ru.inventory.dc.data.formatDateTime
-import ru.inventory.dc.data.hasData
+import ru.inventory.dc.data.hasOwnData
 import ru.inventory.dc.data.isValidIp
 
 private fun scanOptions(): ScanOptions = ScanOptions().apply {
@@ -85,6 +88,7 @@ fun EditorScreen(
     snackbar: SnackbarHostState,
     onOpenHistory: () -> Unit,
     onOpenSettings: () -> Unit,
+    onChangePlacement: () -> Unit,
 ) {
     val draft = vm.draft
     val settings by vm.settings.collectAsStateWithLifecycle()
@@ -92,6 +96,8 @@ fun EditorScreen(
     val isExisting = records.any { it.id == draft.id }
 
     var confirmNew by remember { mutableStateOf(false) }
+    var modelExpandRequest by remember { mutableIntStateOf(0) }
+    val vendorOptions = remember { VENDORS.map { Suggestion(it.name) } }
 
     var scanTarget by rememberSaveable { mutableStateOf<String?>(null) }
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
@@ -112,7 +118,7 @@ fun EditorScreen(
                 subtitle = if (isExisting) "Редактирование записи" else "Новое оборудование",
                 actions = {
                     IconButton(onClick = {
-                        if (draft.hasData()) confirmNew = true else vm.newRecord(keepLocation = false)
+                        if (draft.hasOwnData()) confirmNew = true else vm.newRecord(keepRack = true)
                     }) { Icon(Icons.Filled.NoteAdd, contentDescription = "Новая запись") }
                     IconButton(onClick = onOpenHistory) { Icon(Icons.Filled.History, contentDescription = "Журнал") }
                     IconButton(onClick = onOpenSettings) { Icon(Icons.Filled.Settings, contentDescription = "Настройки") }
@@ -153,24 +159,12 @@ fun EditorScreen(
 
             // ---------- Размещение ----------
             SectionCard("Размещение", Icons.Filled.LocationOn) {
+                PlacementSummary(site = draft.site, hall = draft.room, onChange = onChangePlacement)
                 Field(
-                    draft.site, { v -> vm.updateDraft { it.copy(site = v) } },
-                    label = "Площадка / ЦОД",
-                    capitalization = KeyboardCapitalization.Sentences,
+                    draft.rack, { v -> vm.updateDraft { it.copy(rack = v) } },
+                    label = "Стойка",
+                    capitalization = KeyboardCapitalization.Characters,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Field(
-                        draft.room, { v -> vm.updateDraft { it.copy(room = v) } },
-                        label = "Помещение",
-                        modifier = Modifier.weight(1f),
-                    )
-                    Field(
-                        draft.rack, { v -> vm.updateDraft { it.copy(rack = v) } },
-                        label = "Стойка",
-                        modifier = Modifier.weight(1f),
-                        capitalization = KeyboardCapitalization.Characters,
-                    )
-                }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Field(
                         draft.unit, { v -> vm.updateDraft { it.copy(unit = v) } },
@@ -207,17 +201,34 @@ fun EditorScreen(
                     label = "Тип оборудования",
                     capitalization = KeyboardCapitalization.Sentences,
                 )
-                Field(
-                    draft.vendor, { v -> vm.updateDraft { it.copy(vendor = v) } },
+                SuggestField(
+                    value = draft.vendor,
+                    onValueChange = { v -> vm.updateDraft { it.copy(vendor = v) } },
                     label = "Производитель",
-                    placeholder = "Dell, HPE, Huawei…",
+                    options = vendorOptions,
+                    onSelect = { option ->
+                        vm.updateDraft { it.copy(vendor = option.title) }
+                        // У производителя есть справочник моделей — сразу раскрываем список.
+                        if (findVendor(option.title)?.models?.isNotEmpty() == true) modelExpandRequest++
+                    },
                     capitalization = KeyboardCapitalization.Words,
                 )
-                Field(
-                    draft.model, { v -> vm.updateDraft { it.copy(model = v) } },
-                    label = "Модель",
-                    placeholder = "PowerEdge R750",
-                )
+                val presets = findVendor(draft.vendor)?.models.orEmpty()
+                if (presets.isNotEmpty()) {
+                    SuggestField(
+                        value = draft.model,
+                        onValueChange = { v -> vm.updateDraft { it.copy(model = v) } },
+                        label = "Модель",
+                        options = presets.map { Suggestion(it.name, it.description) },
+                        onSelect = { option -> presets.firstOrNull { it.name == option.title }?.let(vm::applyModel) },
+                        expandRequest = modelExpandRequest,
+                    )
+                } else {
+                    Field(
+                        draft.model, { v -> vm.updateDraft { it.copy(model = v) } },
+                        label = "Модель",
+                    )
+                }
                 Field(
                     draft.hostname, { v -> vm.updateDraft { it.copy(hostname = v) } },
                     label = "Hostname / имя",
@@ -309,6 +320,9 @@ fun EditorScreen(
                 }
             }
 
+            // ---------- Фотографии ----------
+            PhotosSection(vm)
+
             // ---------- Подключения ----------
             SectionCard("Подключения", Icons.Filled.Cable) {
                 if (draft.connections.isEmpty()) {
@@ -358,22 +372,14 @@ fun EditorScreen(
         AlertDialog(
             onDismissRequest = { confirmNew = false },
             title = { Text("Новая запись") },
-            text = { Text("Очистить форму? Несохранённые изменения будут потеряны. Можно оставить площадку, помещение и стойку для следующего устройства.") },
+            text = { Text("Очистить форму? ЦОД, машзал и стойка останутся.") },
             confirmButton = {
                 TextButton(onClick = {
-                    vm.newRecord(keepLocation = true)
+                    vm.newRecord(keepRack = true)
                     confirmNew = false
-                }) { Text("Оставить место") }
+                }) { Text("Очистить") }
             },
-            dismissButton = {
-                Row {
-                    TextButton(onClick = { confirmNew = false }) { Text("Отмена") }
-                    TextButton(onClick = {
-                        vm.newRecord(keepLocation = false)
-                        confirmNew = false
-                    }) { Text("Очистить всё") }
-                }
-            },
+            dismissButton = { TextButton(onClick = { confirmNew = false }) { Text("Отмена") } },
         )
     }
 }

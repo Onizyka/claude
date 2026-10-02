@@ -17,6 +17,7 @@ import androidx.navigation.compose.rememberNavController
 import ru.inventory.dc.ui.AppViewModel
 import ru.inventory.dc.ui.EditorScreen
 import ru.inventory.dc.ui.HistoryScreen
+import ru.inventory.dc.ui.PlacementScreen
 import ru.inventory.dc.ui.SettingsScreen
 import ru.inventory.dc.ui.theme.DcInventoryTheme
 
@@ -38,6 +39,7 @@ private object Routes {
     const val EDITOR = "editor"
     const val HISTORY = "history"
     const val SETTINGS = "settings"
+    const val PLACEMENT = "placement"
 }
 
 @Composable
@@ -49,13 +51,33 @@ private fun InventoryApp(vm: AppViewModel = viewModel()) {
         vm.messages.collect { snackbar.showSnackbar(it) }
     }
 
-    NavHost(navController = nav, startDestination = Routes.EDITOR) {
+    // При первом запуске спрашиваем место установки.
+    val startDestination = remember { if (vm.placement.value.chosen) Routes.EDITOR else Routes.PLACEMENT }
+
+    NavHost(navController = nav, startDestination = startDestination) {
+        composable(Routes.PLACEMENT) {
+            val canGoBack = nav.previousBackStackEntry != null
+            PlacementScreen(
+                initial = vm.placement.value,
+                canGoBack = canGoBack,
+                onBack = { nav.popBackStack() },
+                onDone = { placement ->
+                    vm.setPlacement(placement)
+                    if (canGoBack) {
+                        nav.popBackStack()
+                    } else {
+                        nav.navigate(Routes.EDITOR) { popUpTo(Routes.PLACEMENT) { inclusive = true } }
+                    }
+                },
+            )
+        }
         composable(Routes.EDITOR) {
             EditorScreen(
                 vm = vm,
                 snackbar = snackbar,
                 onOpenHistory = { nav.navigate(Routes.HISTORY) { launchSingleTop = true } },
                 onOpenSettings = { nav.navigate(Routes.SETTINGS) { launchSingleTop = true } },
+                onChangePlacement = { nav.navigate(Routes.PLACEMENT) { launchSingleTop = true } },
             )
         }
         composable(Routes.HISTORY) {

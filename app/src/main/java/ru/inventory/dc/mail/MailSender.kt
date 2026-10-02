@@ -2,6 +2,7 @@ package ru.inventory.dc.mail
 
 import ru.inventory.dc.data.SmtpSecurity
 import ru.inventory.dc.data.SmtpSettings
+import java.io.File
 import java.util.Date
 import java.util.Properties
 import javax.mail.AuthenticationFailedException
@@ -20,7 +21,13 @@ object MailSender {
 
     private const val TIMEOUT_MS = "20000"
 
-    fun send(settings: SmtpSettings, subject: String, text: String, html: String?) {
+    fun send(
+        settings: SmtpSettings,
+        subject: String,
+        text: String,
+        html: String?,
+        attachments: List<File> = emptyList(),
+    ) {
         require(settings.host.isNotBlank()) { "Не указан SMTP-сервер" }
         require(settings.sender.isNotBlank()) { "Не указан адрес отправителя" }
         val recipients = settings.recipients
@@ -71,14 +78,29 @@ object MailSender {
             setSubject(subject, "UTF-8")
             sentDate = Date()
             val textPart = MimeBodyPart().apply { setText(text, "UTF-8") }
-            if (html == null) {
-                setContent(MimeMultipart().apply { addBodyPart(textPart) })
+            val body = if (html == null) {
+                MimeMultipart().apply { addBodyPart(textPart) }
             } else {
                 val htmlPart = MimeBodyPart().apply { setContent(html, "text/html; charset=UTF-8") }
-                setContent(MimeMultipart("alternative").apply {
+                MimeMultipart("alternative").apply {
                     addBodyPart(textPart)
                     addBodyPart(htmlPart)
-                })
+                }
+            }
+            val files = attachments.filter { it.exists() }
+            if (files.isEmpty()) {
+                setContent(body)
+            } else {
+                // Текст письма + фотографии вложениями
+                val mixed = MimeMultipart("mixed")
+                mixed.addBodyPart(MimeBodyPart().apply { setContent(body) })
+                files.forEachIndexed { i, file ->
+                    mixed.addBodyPart(MimeBodyPart().apply {
+                        attachFile(file, "image/jpeg", null)
+                        fileName = "photo_${i + 1}.jpg"
+                    })
+                }
+                setContent(mixed)
             }
         }
 
