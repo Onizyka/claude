@@ -152,7 +152,39 @@ fun isValidIp(value: String): Boolean {
 fun formatDateTime(millis: Long): String =
     SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.forLanguageTag("ru")).format(Date(millis))
 
-val EQUIPMENT_TYPES = listOf("Сервер", "Коммутатор", "СХД", "Маршрутизатор", "Межсетевой экран", "ИБП", "PDU", "Другое")
+val EQUIPMENT_TYPES = listOf("Сервер", "Коммутатор", "СХД", "Маршрутизатор", "Межсетевой экран", "ИБП (UPS)", "PDU", "Другое")
 
 /** Есть ли данные помимо места установки (ЦОД/машзал/стойка подставляются автоматически). */
 fun EquipmentRecord.hasOwnData(): Boolean = copy(site = "", room = "", rack = "").hasData()
+
+// ---------- Маскировка IP для письма ----------
+
+/** IPv4 внутри произвольного текста: захватываем первый октет. */
+private val ipv4InText = Regex("(?<![\\d.])\\d{1,3}(?=\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(?!\\d|\\.\\d))")
+
+/** «192.168.1.50» → «*.168.1.50». Работает и внутри текста (комментарии, примечания). */
+fun maskIpv4(text: String): String = ipv4InText.replace(text, "*")
+
+/** Значение поля с IP: IPv4 — скрываем первый октет, IPv6 — первую группу. */
+fun maskIpField(value: String): String {
+    val masked = maskIpv4(value)
+    if (masked != value) return masked
+    val v = value.trim()
+    return if (v.contains(':') && v.first() != ':') "*" + v.substring(v.indexOf(':')) else value
+}
+
+/** Копия записи для письма: все IP-адреса с замазанным первым октетом. Маска сети не трогается. */
+fun EquipmentRecord.maskedForEmail(): EquipmentRecord = copy(
+    mgmtIp = maskIpField(mgmtIp),
+    mgmtGateway = maskIpField(mgmtGateway),
+    hostname = maskIpv4(hostname),
+    comment = maskIpv4(comment),
+    connections = connections.map {
+        it.copy(
+            localPort = maskIpv4(it.localPort),
+            remoteDevice = maskIpv4(it.remoteDevice),
+            remotePort = maskIpv4(it.remotePort),
+            note = maskIpv4(it.note),
+        )
+    },
+)

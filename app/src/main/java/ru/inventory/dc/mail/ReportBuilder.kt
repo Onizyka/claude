@@ -4,6 +4,7 @@ import ru.inventory.dc.data.EquipmentRecord
 import ru.inventory.dc.data.displayTitle
 import ru.inventory.dc.data.formatDateTime
 import ru.inventory.dc.data.locationLine
+import ru.inventory.dc.data.maskedForEmail
 
 /** Формирует тему и текст письма (plain text + HTML) по записи. Пустые поля в письмо не попадают. */
 object ReportBuilder {
@@ -50,7 +51,8 @@ object ReportBuilder {
         .filter { it.rows.isNotEmpty() }
 
     /** Тема: префикс, оборудование и дата/время. Место установки — только в теле письма. */
-    fun subject(r: EquipmentRecord, prefix: String, timestamp: Long): String {
+    fun subject(record: EquipmentRecord, prefix: String, timestamp: Long): String {
+        val r = record.maskedForEmail()
         val equipment = listOf(r.type, listOf(r.vendor, r.model).filter { it.isNotBlank() }.joinToString(" "))
             .filter { it.isNotBlank() }
             .joinToString(" ")
@@ -61,7 +63,8 @@ object ReportBuilder {
             .joinToString(" ")
     }
 
-    fun text(r: EquipmentRecord, timestamp: Long): String = buildString {
+    fun text(record: EquipmentRecord, timestamp: Long): String = buildString {
+        val r = record.maskedForEmail()
         appendLine("ИНВЕНТАРИЗАЦИЯ ОБОРУДОВАНИЯ")
         appendLine("${r.displayTitle()} — ${formatDateTime(timestamp)}")
         r.locationLine().takeIf { it.isNotBlank() }?.let { appendLine("Место: $it") }
@@ -92,7 +95,8 @@ object ReportBuilder {
         }
     }
 
-    fun html(r: EquipmentRecord, timestamp: Long): String = buildString {
+    fun html(record: EquipmentRecord, timestamp: Long): String = buildString {
+        val r = record.maskedForEmail()
         append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"></head>")
         append("<body style=\"margin:0;padding:16px 0;background:#F2F5F9;font-family:Arial,Helvetica,sans-serif;color:#1B2B3F\">")
         append("<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"max-width:720px;margin:0 auto;background:#FFFFFF;border-radius:12px;overflow:hidden\">")
