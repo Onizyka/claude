@@ -4,7 +4,9 @@ import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
@@ -57,6 +59,15 @@ private fun InventoryApp(vm: AppViewModel = viewModel()) {
     NavHost(navController = nav, startDestination = startDestination) {
         composable(Routes.PLACEMENT) {
             val canGoBack = nav.previousBackStackEntry != null
+            // Первый запуск после переустановки: можно сразу восстановить всё из копии.
+            val restoreLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                if (uri != null) vm.restoreBackup(uri)
+            }
+            LaunchedEffect(vm.restoreGeneration) {
+                if (vm.restoreGeneration > 0 && !canGoBack && vm.placement.value.chosen) {
+                    nav.navigate(Routes.EDITOR) { popUpTo(Routes.PLACEMENT) { inclusive = true } }
+                }
+            }
             PlacementScreen(
                 initial = vm.placement.value,
                 canGoBack = canGoBack,
@@ -68,6 +79,9 @@ private fun InventoryApp(vm: AppViewModel = viewModel()) {
                     } else {
                         nav.navigate(Routes.EDITOR) { popUpTo(Routes.PLACEMENT) { inclusive = true } }
                     }
+                },
+                onRestore = if (canGoBack) null else {
+                    { restoreLauncher.launch(arrayOf("application/json", "application/octet-stream", "text/plain", "*/*")) }
                 },
             )
         }

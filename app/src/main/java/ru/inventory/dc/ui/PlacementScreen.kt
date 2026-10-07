@@ -57,6 +57,7 @@ fun PlacementScreen(
     canGoBack: Boolean,
     onBack: () -> Unit,
     onDone: (Placement) -> Unit,
+    onRestore: (() -> Unit)? = null,
 ) {
     val knownNames = DATA_CENTERS.map { it.name }
     var site by rememberSaveable { mutableStateOf(initial.site) }
@@ -119,13 +120,23 @@ fun PlacementScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (onRestore != null) {
+                InfoBanner(
+                    text = "Переустановили приложение? Данные и настройки можно вернуть из резервной копии.",
+                    actionLabel = "Восстановить",
+                    onAction = onRestore,
+                )
+            }
 
             SectionCard("ЦОД", Icons.Filled.Apartment) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     DATA_CENTERS.forEach { dc ->
                         ChoiceCard(
                             title = dc.name,
-                            subtitle = if (dc.halls.isNotEmpty()) "Машзалы ${dc.halls.joinToString(", ")}" else null,
+                            subtitle = if (dc.halls.isNotEmpty()) {
+                                if (dc.hallTitle == "Машзал") "Машзалы ${dc.halls.joinToString(", ")}"
+                                else "Пом. ${dc.halls.joinToString(", ")}"
+                            } else null,
                             selected = !customSite && site == dc.name,
                             modifier = Modifier.weight(1f),
                             onClick = {
@@ -152,7 +163,8 @@ fun PlacementScreen(
                 }
             }
 
-            SectionCard("Машзал", Icons.Filled.MeetingRoom) {
+            val hallName = dataCenter?.hallTitle ?: "Машзал"
+            SectionCard(hallName, Icons.Filled.MeetingRoom) {
                 if (halls.isNotEmpty()) {
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -161,7 +173,7 @@ fun PlacementScreen(
                         halls.forEach { h ->
                             ChoiceCard(
                                 title = h,
-                                subtitle = "машзал",
+                                subtitle = hallName.lowercase(),
                                 selected = !customHall && hall == h,
                                 modifier = Modifier.size(width = 76.dp, height = 72.dp),
                                 onClick = {
@@ -181,7 +193,7 @@ fun PlacementScreen(
                     )
                 }
                 if (halls.isEmpty() || customHall) {
-                    Field(hall, { hall = it }, label = "Номер или название машзала")
+                    Field(hall, { hall = it }, label = if (hallName == "Машзал") "Номер или название машзала" else "Номер помещения")
                 }
             }
 
@@ -194,7 +206,7 @@ fun PlacementScreen(
                 )
             }
 
-            val summary = listOf(site, hallLabel(hall), rack.takeIf { it.isNotBlank() }?.let { "Стойка $it" }.orEmpty())
+            val summary = listOf(site, hallLabel(site, hall), rack.takeIf { it.isNotBlank() }?.let { "Стойка $it" }.orEmpty())
                 .filter { it.isNotBlank() }
                 .joinToString(" · ")
             if (summary.isNotBlank()) {

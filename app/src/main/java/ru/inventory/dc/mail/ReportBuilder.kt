@@ -3,6 +3,7 @@ package ru.inventory.dc.mail
 import ru.inventory.dc.data.EquipmentRecord
 import ru.inventory.dc.data.displayTitle
 import ru.inventory.dc.data.formatDateTime
+import ru.inventory.dc.data.hallTitle
 import ru.inventory.dc.data.locationLine
 import ru.inventory.dc.data.maskedForEmail
 
@@ -16,7 +17,7 @@ object ReportBuilder {
             "Размещение",
             listOf(
                 "ЦОД" to r.site,
-                "Машзал" to r.room,
+                hallTitle(r.site) to r.room,
                 "Стойка" to r.rack,
                 "Юнит" to r.unit,
                 "Высота, U" to r.heightU,
@@ -29,8 +30,13 @@ object ReportBuilder {
                 "Производитель" to r.vendor,
                 "Модель" to r.model,
                 "Hostname" to r.hostname,
-                "Инвентарный номер" to r.inventoryNumber,
             ),
+        ),
+        Section(
+            "Серийный и инвентарный номер",
+            r.serials.mapIndexed { i, sn ->
+                (if (r.serials.size == 1) "Серийный номер" else "S/N ${i + 1}") to sn
+            } + ("Инвентарный номер" to r.inventoryNumber),
         ),
         Section(
             "MGMT-интерфейс",
@@ -39,12 +45,6 @@ object ReportBuilder {
                 "Маска / префикс" to r.mgmtMask,
                 "Шлюз" to r.mgmtGateway,
             ),
-        ),
-        Section(
-            "Серийные номера",
-            r.serials.mapIndexed { i, sn ->
-                (if (r.serials.size == 1) "Серийный номер" else "S/N ${i + 1}") to sn
-            },
         ),
     )
         .map { section -> section.copy(rows = section.rows.filter { it.second.isNotBlank() }) }
@@ -79,7 +79,8 @@ object ReportBuilder {
             r.connections.forEachIndexed { i, c ->
                 val local = c.localPort.ifBlank { "—" }
                 val remote = listOf(c.remoteDevice, c.remotePort).filter { it.isNotBlank() }.joinToString(" : ").ifBlank { "—" }
-                val note = c.note.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
+                val note = listOf(c.cableType, c.note).filter { it.isNotBlank() }.joinToString(", ")
+                    .takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
                 appendLine("${i + 1}. $local → $remote$note")
             }
         }
@@ -125,13 +126,13 @@ object ReportBuilder {
             appendSectionTitle("Подключения")
             append("<table width=\"100%\" cellpadding=\"6\" cellspacing=\"0\" style=\"font-size:13px;margin-top:6px;border-collapse:collapse\">")
             append("<tr style=\"background:#E6F1FA;color:#003274\">")
-            listOf("#", "Порт", "Устройство", "Порт устройства", "Кабель / примечание").forEach {
+            listOf("#", "Порт", "Устройство", "Порт устройства", "Кабель", "Примечание").forEach {
                 append("<th align=\"left\" style=\"border:1px solid #D8DDE3\">").append(esc(it)).append("</th>")
             }
             append("</tr>")
             r.connections.forEachIndexed { i, c ->
                 append("<tr>")
-                listOf((i + 1).toString(), c.localPort, c.remoteDevice, c.remotePort, c.note).forEach {
+                listOf((i + 1).toString(), c.localPort, c.remoteDevice, c.remotePort, c.cableType, c.note).forEach {
                     append("<td style=\"border:1px solid #D8DDE3\">").append(esc(it.ifBlank { "—" })).append("</td>")
                 }
                 append("</tr>")

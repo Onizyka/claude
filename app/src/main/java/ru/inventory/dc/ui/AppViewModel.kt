@@ -4,6 +4,7 @@ import android.app.Application
 import android.net.Uri
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
@@ -12,11 +13,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import ru.inventory.dc.data.BackupData
+import ru.inventory.dc.data.BackupRepository
+import ru.inventory.dc.data.BackupState
+import ru.inventory.dc.data.DictEntry
+import ru.inventory.dc.data.DictionaryRepository
 import ru.inventory.dc.data.EquipmentRecord
 import ru.inventory.dc.data.ModelPreset
 import ru.inventory.dc.data.PhotoStore
@@ -41,11 +48,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val recordRepo = RecordRepository(app)
     private val settingsRepo = SettingsRepository(app)
     private val placementRepo = PlacementRepository(app)
+    private val dictionaryRepo = DictionaryRepository(app)
+    private val backupRepo = BackupRepository(app)
     val photoStore = PhotoStore(app)
 
     val records: StateFlow<List<EquipmentRecord>> = recordRepo.records
     val settings: StateFlow<SmtpSettings> = settingsRepo.settings
     val placement: StateFlow<Placement> = placementRepo.placement
+    val dictionary: StateFlow<List<DictEntry>> = dictionaryRepo.entries
+    val backupState: StateFlow<BackupState> = backupRepo.state
+
+    /** Увеличивается после восстановления из копии — экраны перечитывают данные. */
+    var restoreGeneration by mutableIntStateOf(0)
+        private set
 
     /** Запись, открытая в редакторе. Восстанавливается после перезапуска приложения. */
     var draft by mutableStateOf(recordRepo.loadDraft()?.forEditing() ?: blankDraft(keepRack = false))
@@ -67,6 +82,27 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val used = records.value.flatMap { it.photos }.toSet() + draft.photos
             photoStore.cleanup(keep = used)
         }
+        // Справочник пустой (первый запуск новой версии) — наполняем из журнала.
+        viewModelScope.launch {
+            if (dictionary.value.isEmpty()) records.value.forEach { dictionaryRepo.learn(it) }
+        }
+        // Автоматическая резервная копия при любых изменениях данных.
+        viewModelScope.launch {
+            combine(records, settings, placement, dictionary, backupState) { _, _, _, _, b -> b.folderUri to b.includePassword }
+                .drop(1)
+                .debounce(3000)
+                .collect { (folder, _) -> if (folder != null) backupRepo.writeAuto(buildBackup()) }
+        }
+    }
+
+    private fun buildBackup(): BackupData {
+        val s = settings.value
+        return BackupData(
+            records = records.value,
+            settings = if (backupState.value.includePassword) s else s.copy(password = ""),
+            placement = placement.value,
+            dictionary = dictionary.value,
+        )
     }
 
     private fun blankDraft(keepRack: Boolean, previous: EquipmentRecord? = null): EquipmentRecord {
@@ -197,6 +233,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 record.copy(updatedAt = System.currentTimeMillis(), status = SendStatus.DRAFT, lastError = null)
             }
             recordRepo.upsert(saved)
+            dictionaryRepo.learn(saved)
             draft = saved.forEditing()
             post("Запись сохранена в журнал")
         }
@@ -252,10 +289,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 onFailure = { record.copy(updatedAt = now, status = SendStatus.FAILED, lastError = MailSender.describeError(it)) },
             )
             recordRepo.upsert(saved)
+            dictionaryRepo.learn(saved)
             sending = false
             onDone(saved, result.isSuccess)
             post(
-                if (result.isSuccess) "Письмо отправлено: ${smtp.recipients}"
+                if (result.isSuccess) "Письмо отправлено (получателей: ${smtp.recipientCount})"
                 else "Не удалось отправить: ${saved.lastError}"
             )
         }
@@ -304,6 +342,57 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     onFailure = { "Ошибка: ${MailSender.describeError(it)}" },
                 )
             )
+        }
+    }
+
+    // ---------- Справочник ----------
+
+    fun forgetSuggestion(entry: DictEntry) {
+        viewModelScope.launch { dictionaryRepo.remove(entry) }
+    }
+
+    // ---------- Резервная копия ----------
+
+    fun setBackupFolder(uri: Uri) {
+        runCatching { backupRepo.setFolder(uri) }
+            .onSuccess {
+                viewModelScope.launch {
+                    if (backupRepo.writeAuto(buildBackup())) post("Резервная копия сохранена")
+                    else post("Не удалось записать копию: ${backupState.value.lastError.orEmpty()}")
+                }
+            }
+            .onFailure { post("Не удалось выбрать папку: ${it.message}") }
+    }
+
+    fun setBackupIncludePassword(include: Boolean) = backupRepo.setIncludePassword(include)
+
+    fun exportBackup(uri: Uri) {
+        viewModelScope.launch {
+            runCatching { backupRepo.write(uri, buildBackup()) }
+                .onSuccess { post("Резервная копия сохранена в файл") }
+                .onFailure { post("Ошибка экспорта: ${it.message}") }
+        }
+    }
+
+    fun restoreBackup(uri: Uri) {
+        viewModelScope.launch {
+            val data = runCatching { backupRepo.read(uri) }.getOrElse {
+                post("Не удалось прочитать копию: ${it.message}")
+                return@launch
+            }
+            // Фото в копию не входят — убираем ссылки на отсутствующие файлы.
+            val restored = data.records.map { r -> r.copy(photos = r.photos.filter { photoStore.file(it).exists() }) }
+            recordRepo.mergeAll(restored)
+            val current = settings.value
+            settingsRepo.save(data.settings.copy(password = data.settings.password.ifEmpty { current.password }))
+            if (data.placement.chosen || data.placement.site.isNotBlank()) {
+                placementRepo.save(data.placement)
+                if (!draft.hasOwnData()) draft = blankDraft(keepRack = false)
+            }
+            dictionaryRepo.merge(data.dictionary)
+            restoreGeneration++
+            val passwordNote = if (data.settings.password.isEmpty() && current.password.isEmpty()) " Введите пароль SMTP в настройках." else ""
+            post("Восстановлено записей: ${data.records.size}.$passwordNote")
         }
     }
 

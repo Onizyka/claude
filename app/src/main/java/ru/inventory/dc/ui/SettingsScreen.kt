@@ -1,5 +1,19 @@
 package ru.inventory.dc.ui
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import ru.inventory.dc.data.BackupRepository
+import ru.inventory.dc.data.formatDateTime
+import ru.inventory.dc.data.splitAddresses
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -64,6 +78,11 @@ fun SettingsScreen(
 ) {
     var s by remember { mutableStateOf(vm.settings.value) }
     var showPassword by remember { mutableStateOf(false) }
+
+    // После восстановления из копии перечитываем настройки.
+    LaunchedEffect(vm.restoreGeneration) {
+        if (vm.restoreGeneration > 0) s = vm.settings.value
+    }
 
     // Сохраняем при уходе с экрана, чтобы изменения не потерялись.
     val latest by rememberUpdatedState(s)
@@ -205,13 +224,20 @@ fun SettingsScreen(
                     supportingText = "Если пусто — используется логин",
                     keyboardType = KeyboardType.Email,
                 )
-                Field(
-                    s.recipients, { s = s.copy(recipients = it) },
-                    label = "Получатели",
-                    placeholder = "admin@company.ru",
-                    supportingText = "Несколько адресов — через запятую",
-                    keyboardType = KeyboardType.Email,
-                    singleLine = false,
+                AddressListEditor(
+                    title = "Получатель",
+                    value = s.recipients,
+                    onChange = { s = s.copy(recipients = it) },
+                    addLabel = "Добавить получателя",
+                    resetKey = vm.restoreGeneration,
+                )
+                AddressListEditor(
+                    title = "Копия (CC)",
+                    value = s.cc,
+                    onChange = { s = s.copy(cc = it) },
+                    addLabel = "Добавить копию",
+                    resetKey = vm.restoreGeneration,
+                    startEmpty = true,
                 )
                 Field(
                     s.subjectPrefix, { s = s.copy(subjectPrefix = it) },
@@ -219,7 +245,138 @@ fun SettingsScreen(
                 )
             }
 
+            BackupSection(vm, beforeRestore = { vm.saveSettings(s, silent = true) })
+
             Spacer(Modifier.height(8.dp))
         }
+    }
+}
+
+private val emailRegex = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
+
+/** Список адресов: по одному полю на адрес, количество не ограничено. */
+@Composable
+private fun AddressListEditor(
+    title: String,
+    value: String,
+    onChange: (String) -> Unit,
+    addLabel: String,
+    resetKey: Int,
+    startEmpty: Boolean = false,
+) {
+    var rows by remember(resetKey) {
+        mutableStateOf(splitAddresses(value).ifEmpty { if (startEmpty) emptyList() else listOf("") })
+    }
+    fun update(newRows: List<String>) {
+        rows = newRows
+        onChange(newRows.map { it.trim() }.filter { it.isNotEmpty() }.joinToString(", "))
+    }
+    rows.forEachIndexed { index, address ->
+        val invalid = address.isNotBlank() && !emailRegex.matches(address.trim())
+        Field(
+            address,
+            { v -> update(rows.toMutableList().also { it[index] = v.trim() }) },
+            label = if (rows.size > 1) "$title ${index + 1}" else title,
+            placeholder = "name@company.ru",
+            keyboardType = KeyboardType.Email,
+            isError = invalid,
+            supportingText = if (invalid) "Проверьте адрес" else null,
+            trailingIcon = if (rows.size > 1 || address.isNotEmpty() || startEmpty) {
+                {
+                    IconButton(onClick = { update(rows.toMutableList().also { it.removeAt(index) }) }) {
+                        Icon(Icons.Filled.Close, contentDescription = "Удалить адрес")
+                    }
+                }
+            } else null,
+        )
+    }
+    TextButton(onClick = { rows = rows + "" }) {
+        Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(addLabel)
+    }
+}
+
+@Composable
+private fun BackupSection(vm: AppViewModel, beforeRestore: () -> Unit) {
+    val backup by vm.backupState.collectAsStateWithLifecycle()
+    var confirmRestore by remember { mutableStateOf<Uri?>(null) }
+
+    val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) vm.setBackupFolder(uri)
+    }
+    val exportFile = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) vm.exportBackup(uri)
+    }
+    val importFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) confirmRestore = uri
+    }
+
+    SectionCard("Резервная копия", Icons.Filled.Backup) {
+        Text(
+            "Журнал, настройки почты, место установки и справочник оборудования сохраняются в файл " +
+                "${BackupRepository.FILE_NAME}. Файл остаётся на телефоне после удаления приложения — " +
+                "после переустановки нажмите «Восстановить». Фотографии в копию не входят.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (backup.folderUri == null) {
+            InfoBanner("Автокопия выключена. Выберите папку, например «Documents».")
+        } else {
+            val last = backup.lastBackupAt?.let { "последняя копия ${formatDateTime(it)}" } ?: "копия ещё не записана"
+            InfoBanner(
+                text = "Автокопия в папку «${backup.folderName ?: "выбрана"}»: $last" +
+                    (backup.lastError?.let { "\nОшибка: $it" } ?: ""),
+                isError = backup.lastError != null,
+            )
+        }
+        OutlinedButton(
+            onClick = { pickFolder.launch(null) },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+        ) {
+            Icon(Icons.Filled.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(if (backup.folderUri == null) "Выбрать папку для автокопии" else "Сменить папку")
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Сохранять пароль SMTP в копии", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Пароль будет записан в файл открытым текстом",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = backup.includePassword, onCheckedChange = vm::setBackupIncludePassword)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedButton(
+                onClick = { exportFile.launch(BackupRepository.FILE_NAME) },
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(12.dp),
+            ) { Text("Экспорт") }
+            Button(
+                onClick = { importFile.launch(arrayOf("application/json", "application/octet-stream", "text/plain", "*/*")) },
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(12.dp),
+            ) { Text("Восстановить") }
+        }
+    }
+
+    confirmRestore?.let { uri ->
+        AlertDialog(
+            onDismissRequest = { confirmRestore = null },
+            title = { Text("Восстановить из копии?") },
+            text = { Text("Записи из файла добавятся в журнал, настройки почты и место установки будут заменены значениями из копии.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    beforeRestore()
+                    vm.restoreBackup(uri)
+                    confirmRestore = null
+                }) { Text("Восстановить") }
+            },
+            dismissButton = { TextButton(onClick = { confirmRestore = null }) { Text("Отмена") } },
+        )
     }
 }

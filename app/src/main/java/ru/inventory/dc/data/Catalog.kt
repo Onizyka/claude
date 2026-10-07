@@ -1,18 +1,29 @@
 package ru.inventory.dc.data
 
-/** Справочник площадок. Чтобы добавить машзал или ЦОД — достаточно поправить этот список. */
-data class DataCenter(val name: String, val halls: List<String>)
+/**
+ * Справочник площадок. Чтобы добавить машзал или ЦОД — достаточно поправить этот список.
+ * [hallTitle] — как называется помещение на площадке: машзал в ЦОД, помещение в офисе.
+ */
+data class DataCenter(val name: String, val halls: List<String>, val hallTitle: String = "Машзал")
 
 val DATA_CENTERS = listOf(
     DataCenter("оЦОД", listOf("2", "4", "5", "9")),
     DataCenter("рЦОД", emptyList()),
+    DataCenter("Офис", listOf("949", "1416"), hallTitle = "Помещение"),
 )
 
-/** «5» → «Машзал 5»; произвольный текст оставляем как есть. */
-fun hallLabel(hall: String): String {
+/** Название помещения для площадки: «Машзал» или «Помещение». */
+fun hallTitle(site: String): String =
+    DATA_CENTERS.firstOrNull { it.name.equals(site.trim(), ignoreCase = true) }?.hallTitle ?: "Машзал"
+
+/** «5» → «Машзал 5», в офисе «949» → «Помещение 949»; произвольный текст оставляем как есть. */
+fun hallLabel(site: String, hall: String): String {
     val h = hall.trim()
-    return if (h.isNotEmpty() && h.all { it.isDigit() }) "Машзал $h" else h
+    return if (h.isNotEmpty() && h.all { it.isDigit() }) "${hallTitle(site)} $h" else h
 }
+
+/** Варианты кабеля в подключениях; третий вариант — ввести своё значение. */
+val CABLE_TYPES = listOf("Медь", "Оптика")
 
 /** Модель оборудования из справочника. */
 data class ModelPreset(

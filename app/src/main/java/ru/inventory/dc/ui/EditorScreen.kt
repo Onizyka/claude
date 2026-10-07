@@ -39,6 +39,10 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -67,7 +71,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import ru.inventory.dc.data.EQUIPMENT_TYPES
+import ru.inventory.dc.data.CABLE_TYPES
+import ru.inventory.dc.data.DictCategory
+import ru.inventory.dc.data.DictEntry
 import ru.inventory.dc.data.PortConnection
+import ru.inventory.dc.data.SuggestionItem
+import ru.inventory.dc.data.suggestions
 import ru.inventory.dc.data.VENDORS
 import ru.inventory.dc.data.findVendor
 import ru.inventory.dc.data.SendStatus
@@ -79,6 +88,7 @@ private fun scanOptions(): ScanOptions = ScanOptions().apply {
     setPrompt("Наведите камеру на QR-код или штрихкод")
     setBeepEnabled(true)
     setOrientationLocked(false)
+    setCaptureActivity(ScannerActivity::class.java)
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -97,7 +107,21 @@ fun EditorScreen(
 
     var confirmNew by remember { mutableStateOf(false) }
     var modelExpandRequest by remember { mutableIntStateOf(0) }
-    val vendorOptions = remember { VENDORS.map { Suggestion(it.name) } }
+    val dictionary by vm.dictionary.collectAsStateWithLifecycle()
+    // Каталог + запомненные значения; часто используемые предлагаются первыми.
+    val typeOptions = remember(dictionary) {
+        EQUIPMENT_TYPES.map { SuggestionItem(it) } + dictionary.suggestions(DictCategory.TYPE)
+    }
+    val vendorOptions = remember(dictionary) {
+        dictionary.suggestions(DictCategory.VENDOR) + VENDORS.map { SuggestionItem(it.name) }
+    }
+    val presets = findVendor(draft.vendor)?.models.orEmpty()
+    val modelOptions = remember(dictionary, draft.vendor) {
+        presets.map { SuggestionItem(it.name, it.description, weight = 1000) } +
+            dictionary.suggestions(DictCategory.MODEL, parent = draft.vendor.takeIf { it.isNotBlank() })
+    }
+    val deviceOptions = remember(dictionary) { dictionary.suggestions(DictCategory.DEVICE) }
+    val cableOptions = remember(dictionary) { dictionary.suggestions(DictCategory.CABLE) }
 
     var scanTarget by rememberSaveable { mutableStateOf<String?>(null) }
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
@@ -196,53 +220,47 @@ fun EditorScreen(
                         )
                     }
                 }
-                Field(
-                    draft.type, { v -> vm.updateDraft { it.copy(type = v) } },
+                SuggestField(
+                    value = draft.type,
+                    onValueChange = { v -> vm.updateDraft { it.copy(type = v) } },
                     label = "Тип оборудования",
+                    options = typeOptions,
+                    onSelect = { option -> vm.updateDraft { it.copy(type = option.title) } },
                     capitalization = KeyboardCapitalization.Sentences,
+                    onRemove = vm::forgetSuggestion,
                 )
                 SuggestField(
                     value = draft.vendor,
                     onValueChange = { v -> vm.updateDraft { it.copy(vendor = v) } },
                     label = "Производитель",
+                    placeholder = "Начните вводить: kr → Kraftway",
                     options = vendorOptions,
                     onSelect = { option ->
                         vm.updateDraft { it.copy(vendor = option.title) }
-                        // У производителя есть справочник моделей — сразу раскрываем список.
-                        if (findVendor(option.title)?.models?.isNotEmpty() == true) modelExpandRequest++
+                        // У производителя есть модели — сразу раскрываем список.
+                        val hasModels = findVendor(option.title)?.models?.isNotEmpty() == true ||
+                            dictionary.suggestions(DictCategory.MODEL, option.title).isNotEmpty()
+                        if (hasModels) modelExpandRequest++
                     },
                     capitalization = KeyboardCapitalization.Words,
+                    onRemove = vm::forgetSuggestion,
                 )
-                val presets = findVendor(draft.vendor)?.models.orEmpty()
-                if (presets.isNotEmpty()) {
-                    SuggestField(
-                        value = draft.model,
-                        onValueChange = { v -> vm.updateDraft { it.copy(model = v) } },
-                        label = "Модель",
-                        options = presets.map { Suggestion(it.name, it.description) },
-                        onSelect = { option -> presets.firstOrNull { it.name == option.title }?.let(vm::applyModel) },
-                        expandRequest = modelExpandRequest,
-                    )
-                } else {
-                    Field(
-                        draft.model, { v -> vm.updateDraft { it.copy(model = v) } },
-                        label = "Модель",
-                    )
-                }
+                SuggestField(
+                    value = draft.model,
+                    onValueChange = { v -> vm.updateDraft { it.copy(model = v) } },
+                    label = "Модель",
+                    options = modelOptions,
+                    onSelect = { option ->
+                        val preset = presets.firstOrNull { it.name == option.title }
+                        if (preset != null) vm.applyModel(preset) else vm.updateDraft { it.copy(model = option.title) }
+                    },
+                    expandRequest = modelExpandRequest,
+                    onRemove = vm::forgetSuggestion,
+                )
                 Field(
                     draft.hostname, { v -> vm.updateDraft { it.copy(hostname = v) } },
                     label = "Hostname / имя",
                     keyboardType = KeyboardType.Uri,
-                )
-                Field(
-                    draft.inventoryNumber, { v -> vm.updateDraft { it.copy(inventoryNumber = v) } },
-                    label = "Инвентарный номер",
-                    capitalization = KeyboardCapitalization.Characters,
-                    trailingIcon = {
-                        IconButton(onClick = { scan(AppViewModel.SCAN_INVENTORY) }) {
-                            Icon(Icons.Filled.QrCodeScanner, contentDescription = "Сканировать")
-                        }
-                    },
                 )
             }
 
@@ -277,7 +295,7 @@ fun EditorScreen(
             }
 
             // ---------- Серийные номера ----------
-            SectionCard("Серийные номера", Icons.Filled.QrCode2) {
+            SectionCard("Серийный и инвентарный номер", Icons.Filled.QrCode2) {
                 draft.serials.forEachIndexed { index, serial ->
                     Field(
                         serial,
@@ -318,6 +336,16 @@ fun EditorScreen(
                         Text("Сканировать")
                     }
                 }
+                Field(
+                    draft.inventoryNumber, { v -> vm.updateDraft { it.copy(inventoryNumber = v) } },
+                    label = "Инвентарный номер",
+                    capitalization = KeyboardCapitalization.Characters,
+                    trailingIcon = {
+                        IconButton(onClick = { scan(AppViewModel.SCAN_INVENTORY) }) {
+                            Icon(Icons.Filled.QrCodeScanner, contentDescription = "Сканировать")
+                        }
+                    },
+                )
             }
 
             // ---------- Фотографии ----------
@@ -339,6 +367,9 @@ fun EditorScreen(
                             connection = connection,
                             onChange = vm::updateConnection,
                             onRemove = { vm.removeConnection(connection.id) },
+                            deviceOptions = deviceOptions,
+                            cableOptions = cableOptions,
+                            onForget = vm::forgetSuggestion,
                         )
                     }
                 }
@@ -384,12 +415,16 @@ fun EditorScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ConnectionEditor(
     index: Int,
     connection: PortConnection,
     onChange: (PortConnection) -> Unit,
     onRemove: () -> Unit,
+    deviceOptions: List<SuggestionItem>,
+    cableOptions: List<SuggestionItem>,
+    onForget: (DictEntry) -> Unit,
 ) {
     Surface(
         shape = RoundedCornerShape(12.dp),
@@ -413,20 +448,63 @@ private fun ConnectionEditor(
                 label = "Порт этого устройства",
                 placeholder = "NIC1, eth0, iLO",
             )
-            Field(
-                connection.remoteDevice, { onChange(connection.copy(remoteDevice = it)) },
+            SuggestField(
+                value = connection.remoteDevice,
+                onValueChange = { onChange(connection.copy(remoteDevice = it)) },
                 label = "Подключено к устройству",
                 placeholder = "SW-CORE-01",
+                options = deviceOptions,
+                onSelect = { onChange(connection.copy(remoteDevice = it.title)) },
+                onRemove = onForget,
             )
             Field(
                 connection.remotePort, { onChange(connection.copy(remotePort = it)) },
                 label = "Порт на устройстве",
                 placeholder = "Gi1/0/24",
             )
+
+            // Кабель: медь / оптика / свой вариант
+            val preset = CABLE_TYPES.firstOrNull { it.equals(connection.cableType, ignoreCase = true) }
+            var custom by rememberSaveable(connection.id) {
+                mutableStateOf(connection.cableType.isNotBlank() && preset == null)
+            }
+            Text("Кабель", style = MaterialTheme.typography.labelLarge)
+            val choices = CABLE_TYPES + "Другой"
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                choices.forEachIndexed { i, title ->
+                    val isCustom = i == CABLE_TYPES.size
+                    val selected = if (isCustom) custom else !custom && preset == title
+                    SegmentedButton(
+                        selected = selected,
+                        onClick = {
+                            if (isCustom) {
+                                custom = true
+                                if (preset != null) onChange(connection.copy(cableType = ""))
+                            } else {
+                                custom = false
+                                // Повторное нажатие снимает выбор — поле необязательное.
+                                onChange(connection.copy(cableType = if (selected) "" else title))
+                            }
+                        },
+                        shape = SegmentedButtonDefaults.itemShape(i, choices.size),
+                    ) { Text(title) }
+                }
+            }
+            if (custom) {
+                SuggestField(
+                    value = connection.cableType,
+                    onValueChange = { onChange(connection.copy(cableType = it)) },
+                    label = "Свой тип кабеля",
+                    placeholder = "DAC, AOC, силовой C13-C14…",
+                    options = cableOptions,
+                    onSelect = { onChange(connection.copy(cableType = it.title)) },
+                    onRemove = onForget,
+                )
+            }
             Field(
                 connection.note, { onChange(connection.copy(note = it)) },
-                label = "Кабель / примечание",
-                placeholder = "Патч-корд 2 м, метка C-015",
+                label = "Примечание / маркировка",
+                placeholder = "2 м, метка C-015",
             )
         }
     }

@@ -62,6 +62,16 @@ class RecordRepository(context: Context) {
         if (index >= 0) list.toMutableList().also { it[index] = record } else list + record
     }
 
+    /** Слияние с записями из резервной копии: при совпадении берём более свежую версию. */
+    suspend fun mergeAll(incoming: List<EquipmentRecord>) = mutate { list ->
+        val byId = list.associateBy { it.id }.toMutableMap()
+        incoming.forEach { r ->
+            val existing = byId[r.id]
+            if (existing == null || r.updatedAt > existing.updatedAt) byId[r.id] = r
+        }
+        byId.values.toList()
+    }
+
     suspend fun delete(id: String) = mutate { list -> list.filterNot { it.id == id } }
 
     private suspend fun mutate(block: (List<EquipmentRecord>) -> List<EquipmentRecord>) =

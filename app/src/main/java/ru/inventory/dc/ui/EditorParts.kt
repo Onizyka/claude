@@ -63,16 +63,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
+import ru.inventory.dc.data.DictEntry
 import ru.inventory.dc.data.PhotoStore
+import ru.inventory.dc.data.SuggestionItem
+import ru.inventory.dc.data.rankSuggestions
 import ru.inventory.dc.data.hallLabel
 import ru.inventory.dc.ui.theme.BrandColors
 
-/** Вариант в выпадающем списке. */
-data class Suggestion(val title: String, val subtitle: String? = null)
-
 /**
  * Поле ввода с выпадающим списком подсказок. Можно выбрать из списка или ввести своё значение.
- * Увеличение [expandRequest] программно раскрывает список.
+ * Подсказки ищутся без учёта регистра: «kr» → «Kraftway». Увеличение [expandRequest] раскрывает список.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -80,24 +80,21 @@ fun SuggestField(
     value: String,
     onValueChange: (String) -> Unit,
     label: String,
-    options: List<Suggestion>,
-    onSelect: (Suggestion) -> Unit,
+    options: List<SuggestionItem>,
+    onSelect: (SuggestionItem) -> Unit,
+    modifier: Modifier = Modifier,
     placeholder: String? = null,
     capitalization: KeyboardCapitalization = KeyboardCapitalization.None,
     expandRequest: Int = 0,
+    onRemove: ((DictEntry) -> Unit)? = null,
 ) {
     var expanded by remember { mutableStateOf(false) }
     LaunchedEffect(expandRequest) { if (expandRequest > 0) expanded = true }
 
-    val query = value.trim()
-    val filtered = if (query.isEmpty() || options.any { it.title.equals(query, ignoreCase = true) }) {
-        options
-    } else {
-        options.filter { it.title.contains(query, ignoreCase = true) }
-    }
+    val filtered = remember(options, value) { rankSuggestions(options, value) }
     val showMenu = expanded && filtered.isNotEmpty()
 
-    ExposedDropdownMenuBox(expanded = showMenu, onExpandedChange = { expanded = it }) {
+    ExposedDropdownMenuBox(expanded = showMenu, onExpandedChange = { expanded = it }, modifier = modifier) {
         Field(
             value,
             {
@@ -110,11 +107,13 @@ fun SuggestField(
                 .menuAnchor(MenuAnchorType.PrimaryEditable),
             placeholder = placeholder,
             capitalization = capitalization,
-            trailingIcon = {
-                IconButton(onClick = { expanded = !expanded }) {
-                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = showMenu)
+            trailingIcon = if (options.isNotEmpty()) {
+                {
+                    IconButton(onClick = { expanded = !expanded }) {
+                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = showMenu)
+                    }
                 }
-            },
+            } else null,
         )
         ExposedDropdownMenu(expanded = showMenu, onDismissRequest = { expanded = false }) {
             filtered.forEach { option ->
@@ -131,6 +130,18 @@ fun SuggestField(
                         onSelect(option)
                         expanded = false
                     },
+                    trailingIcon = if (option.entry != null && onRemove != null) {
+                        {
+                            IconButton(onClick = { onRemove(option.entry) }) {
+                                Icon(
+                                    Icons.Filled.Close,
+                                    contentDescription = "Забыть значение",
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    } else null,
                     contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding,
                 )
             }
@@ -149,7 +160,7 @@ fun PlacementSummary(site: String, hall: String, onChange: () -> Unit) {
         Row(Modifier.padding(start = 14.dp, top = 8.dp, bottom = 8.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("ЦОД · машзал", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                val text = listOf(site, hallLabel(hall)).filter { it.isNotBlank() }.joinToString(" · ")
+                val text = listOf(site, hallLabel(site, hall)).filter { it.isNotBlank() }.joinToString(" · ")
                 Text(
                     text.ifBlank { "Не выбрано" },
                     style = MaterialTheme.typography.titleMedium,

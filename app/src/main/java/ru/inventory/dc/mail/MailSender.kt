@@ -2,6 +2,7 @@ package ru.inventory.dc.mail
 
 import ru.inventory.dc.data.SmtpSecurity
 import ru.inventory.dc.data.SmtpSettings
+import ru.inventory.dc.data.splitAddresses
 import java.io.File
 import java.util.Date
 import java.util.Properties
@@ -30,10 +31,8 @@ object MailSender {
     ) {
         require(settings.host.isNotBlank()) { "Не указан SMTP-сервер" }
         require(settings.sender.isNotBlank()) { "Не указан адрес отправителя" }
-        val recipients = settings.recipients
-            .split(',', ';', ' ', '\n')
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
+        val recipients = splitAddresses(settings.recipients)
+        val cc = splitAddresses(settings.cc)
         require(recipients.isNotEmpty()) { "Не указан получатель" }
 
         val port = settings.port.trim().toIntOrNull() ?: settings.security.defaultPort
@@ -75,6 +74,7 @@ object MailSender {
         val message = MimeMessage(session).apply {
             setFrom(InternetAddress(settings.sender))
             setRecipients(Message.RecipientType.TO, recipients.map { InternetAddress(it, true) }.toTypedArray())
+            if (cc.isNotEmpty()) setRecipients(Message.RecipientType.CC, cc.map { InternetAddress(it, true) }.toTypedArray())
             setSubject(subject, "UTF-8")
             sentDate = Date()
             val textPart = MimeBodyPart().apply { setText(text, "UTF-8") }

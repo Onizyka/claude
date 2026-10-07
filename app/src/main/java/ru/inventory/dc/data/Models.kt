@@ -15,16 +15,19 @@ data class PortConnection(
     val remoteDevice: String = "",
     /** Порт на удалённом устройстве. */
     val remotePort: String = "",
-    /** Кабель, маркировка, примечание. */
+    /** Тип кабеля: «Медь», «Оптика» или своё значение. */
+    val cableType: String = "",
+    /** Маркировка, длина, примечание. */
     val note: String = "",
 ) {
     fun isBlank(): Boolean =
-        localPort.isBlank() && remoteDevice.isBlank() && remotePort.isBlank() && note.isBlank()
+        localPort.isBlank() && remoteDevice.isBlank() && remotePort.isBlank() && cableType.isBlank() && note.isBlank()
 
     fun trimmed(): PortConnection = copy(
         localPort = localPort.trim(),
         remoteDevice = remoteDevice.trim(),
         remotePort = remotePort.trim(),
+        cableType = cableType.trim(),
         note = note.trim(),
     )
 }
@@ -120,7 +123,7 @@ fun EquipmentRecord.displayTitle(): String =
 
 fun EquipmentRecord.locationLine(): String = listOfNotNull(
     site.takeIf { it.isNotBlank() },
-    room.takeIf { it.isNotBlank() }?.let(::hallLabel),
+    room.takeIf { it.isNotBlank() }?.let { hallLabel(site, it) },
     rack.takeIf { it.isNotBlank() }?.let { "Стойка $it" },
     unit.takeIf { it.isNotBlank() }?.let { u ->
         val height = heightU.takeIf { it.isNotBlank() }?.let { " (${it}U)" }.orEmpty()
@@ -132,7 +135,7 @@ fun EquipmentRecord.matches(query: String): Boolean {
     val q = query.trim()
     if (q.isEmpty()) return true
     val haystack = textFields() + serials + connections.flatMap {
-        listOf(it.localPort, it.remoteDevice, it.remotePort, it.note)
+        listOf(it.localPort, it.remoteDevice, it.remotePort, it.cableType, it.note)
     }
     return haystack.any { it.contains(q, ignoreCase = true) }
 }

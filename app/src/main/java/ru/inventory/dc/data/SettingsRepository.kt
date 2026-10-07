@@ -8,18 +8,21 @@ import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.Serializable
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
+@Serializable
 enum class SmtpSecurity(val title: String, val defaultPort: Int) {
     NONE("Нет", 25),
     STARTTLS("STARTTLS", 587),
     SSL("SSL/TLS", 465),
 }
 
+@Serializable
 data class SmtpSettings(
     val host: String = "",
     val port: String = SmtpSecurity.STARTTLS.defaultPort.toString(),
@@ -27,11 +30,16 @@ data class SmtpSettings(
     val username: String = "",
     val password: String = "",
     val fromAddress: String = "",
+    /** Получатели через запятую — количество не ограничено. */
     val recipients: String = "",
+    /** Копия (CC) через запятую. */
+    val cc: String = "",
     val subjectPrefix: String = DEFAULT_SUBJECT_PREFIX,
     val trustAllCerts: Boolean = false,
 ) {
     val sender: String get() = fromAddress.trim().ifBlank { username.trim() }
+
+    val recipientCount: Int get() = splitAddresses(recipients).size + splitAddresses(cc).size
 
     val isConfigured: Boolean
         get() = host.isNotBlank() && recipients.isNotBlank() && sender.isNotBlank()
@@ -61,6 +69,7 @@ class SettingsRepository(context: Context) {
             password = SecretCipher.decrypt(prefs.getString(K_PASSWORD, null).orEmpty()),
             fromAddress = prefs.getString(K_FROM, null).orEmpty(),
             recipients = prefs.getString(K_TO, null).orEmpty(),
+            cc = prefs.getString(K_CC, null).orEmpty(),
             subjectPrefix = prefs.getString(K_PREFIX, null) ?: SmtpSettings.DEFAULT_SUBJECT_PREFIX,
             trustAllCerts = prefs.getBoolean(K_TRUST_ALL, false),
         )
@@ -76,6 +85,7 @@ class SettingsRepository(context: Context) {
             .putString(K_PASSWORD, SecretCipher.encrypt(settings.password))
             .putString(K_FROM, settings.fromAddress.trim())
             .putString(K_TO, settings.recipients.trim())
+            .putString(K_CC, settings.cc.trim())
             .putString(K_PREFIX, settings.subjectPrefix)
             .putBoolean(K_TRUST_ALL, settings.trustAllCerts)
             .apply()
@@ -90,6 +100,7 @@ class SettingsRepository(context: Context) {
         const val K_PASSWORD = "password"
         const val K_FROM = "from"
         const val K_TO = "recipients"
+        const val K_CC = "cc"
         const val K_PREFIX = "subject_prefix"
         const val K_TRUST_ALL = "trust_all_certs"
     }
@@ -146,6 +157,7 @@ private object SecretCipher {
 }
 
 /** Текущее место установки: задаётся один раз для серии устройств. */
+@Serializable
 data class Placement(
     val site: String = "",
     val hall: String = "",
@@ -153,7 +165,7 @@ data class Placement(
     /** Пользователь уже проходил экран выбора места. */
     val chosen: Boolean = false,
 ) {
-    fun summary(): String = listOf(site, hallLabel(hall), rack.takeIf { it.isNotBlank() }?.let { "Стойка $it" }.orEmpty())
+    fun summary(): String = listOf(site, hallLabel(site, hall), rack.takeIf { it.isNotBlank() }?.let { "Стойка $it" }.orEmpty())
         .filter { it.isNotBlank() }
         .joinToString(" · ")
 }
@@ -188,3 +200,7 @@ class PlacementRepository(context: Context) {
         _placement.value = value
     }
 }
+
+/** Разбор списка адресов: разделители — запятая, точка с запятой, пробел, перевод строки. */
+fun splitAddresses(text: String): List<String> =
+    text.split(',', ';', ' ', '\n').map { it.trim() }.filter { it.isNotEmpty() }
