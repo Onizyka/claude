@@ -12,7 +12,10 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -25,6 +28,9 @@ import ru.inventory.dc.ui.HistoryScreen
 import ru.inventory.dc.ui.LockScreen
 import ru.inventory.dc.ui.PlacementScreen
 import ru.inventory.dc.ui.SettingsScreen
+import ru.inventory.dc.ui.WhatsNewDialog
+import ru.inventory.dc.ui.WhatsNewPrefs
+import ru.inventory.dc.ui.notesSince
 import ru.inventory.dc.ui.theme.DcInventoryTheme
 
 class MainActivity : ComponentActivity() {
@@ -81,6 +87,16 @@ private fun AppRoot(vm: AppViewModel) {
 @Composable
 private fun InventoryApp(vm: AppViewModel, snackbar: SnackbarHostState) {
     val nav = rememberNavController()
+    val context = LocalContext.current
+
+    // После обновления показываем, что изменилось.
+    var whatsNew by remember { mutableStateOf(notesSince(WhatsNewPrefs.lastSeen(context))) }
+    if (whatsNew.isNotEmpty()) {
+        WhatsNewDialog("Что нового", whatsNew) {
+            WhatsNewPrefs.markSeen(context)
+            whatsNew = emptyList()
+        }
+    }
 
     // Место установки ещё не выбрано — спрашиваем его первым делом.
     val startDestination = remember { if (vm.currentPlacement().chosen) Routes.EDITOR else Routes.PLACEMENT }

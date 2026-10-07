@@ -345,6 +345,11 @@ private fun AuthScaffold(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             content()
+            Text(
+                "Версия $APP_VERSION",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Spacer(Modifier.height(8.dp))
         }
     }

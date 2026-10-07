@@ -3,12 +3,14 @@ package ru.inventory.dc.ui
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import ru.inventory.dc.CHANGELOG
 import ru.inventory.dc.data.InventoryDatabase
 import ru.inventory.dc.data.formatDateTime
 import ru.inventory.dc.data.splitAddresses
@@ -241,6 +243,8 @@ fun SettingsScreen(
                 vm.lockNow()
             })
 
+            AboutSection()
+
             Spacer(Modifier.height(8.dp))
         }
     }
@@ -398,4 +402,20 @@ private fun ChangePasswordDialog(vm: AppViewModel, onDismiss: () -> Unit) {
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
     )
+}
+
+@Composable
+private fun AboutSection() {
+    var showChangelog by remember { mutableStateOf(false) }
+    SectionCard("О приложении", Icons.Filled.Info) {
+        Text("Инвентаризация ЦОД, версия $APP_VERSION", style = MaterialTheme.typography.bodyLarge)
+        OutlinedButton(
+            onClick = { showChangelog = true },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+        ) { Text("История версий") }
+    }
+    if (showChangelog) {
+        WhatsNewDialog("История версий", CHANGELOG) { showChangelog = false }
+    }
 }

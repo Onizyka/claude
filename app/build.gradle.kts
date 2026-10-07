@@ -5,6 +5,18 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+/**
+ * Версия приложения. Повышается при каждом изменении (см. CHANGELOG.md):
+ * новая функция — средняя цифра (2.1.0 → 2.2.0), исправление — последняя (2.1.0 → 2.1.1).
+ */
+val appVersion = "2.1.0"
+
+/** 2.1.0 → 20100: код версии растёт вместе с номером. */
+fun versionCodeOf(version: String): Int {
+    val (major, minor, patch) = version.split(".").map { it.toInt() }
+    return major * 10000 + minor * 100 + patch
+}
+
 android {
     namespace = "ru.inventory.dc"
     compileSdk = 35
@@ -13,12 +25,27 @@ android {
         applicationId = "ru.inventory.dc"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "2.0"
+        versionCode = versionCodeOf(appVersion)
+        versionName = appVersion
+    }
+
+    // Ключ подписи передаётся сборке через переменные окружения (в GitHub — из секретов),
+    // в репозитории его нет.
+    signingConfigs {
+        val keystorePath = System.getenv("SIGNING_KEYSTORE_PATH")
+        if (!keystorePath.isNullOrBlank()) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("SIGNING_STORE_PASSWORD")
+                keyAlias = System.getenv("SIGNING_KEY_ALIAS")
+                keyPassword = System.getenv("SIGNING_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
+            signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
@@ -35,6 +62,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {

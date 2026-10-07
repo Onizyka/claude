@@ -5,6 +5,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -18,10 +21,81 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Build debug APK
-        run: ./gradlew assembleDebug --stacktrace
+      - name: Read app version
+        id: version
+        run: |
+          VERSION=$(grep -oP 'val appVersion = "\K[^"]+' app/build.gradle.kts)
+          echo "name=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Версия: $VERSION"
 
-      - uses: actions/upload-artifact@v4
+      # Постоянный ключ подписи хранится в секретах репозитория (SIGNING_*).
+      # Пока секретов нет, release собирается с временным ключом — только для проверки сборки.
+      - name: Prepare signing key
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "official=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Секреты подписи не заданы — release подписан временным ключом и не публикуется."
+            keytool -genkeypair -keystore "$RUNNER_TEMP/release.jks" -alias test -keyalg RSA -keysize 2048 \
+              -validity 1 -storepass testtest -keypass testtest -dname "CN=Test"
+            echo "official=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build release APK
+        env:
+          SIGNING_KEYSTORE_PATH: ${{ runner.temp }}/release.jks
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD || 'testtest' }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS || 'test' }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD || secrets.SIGNING_STORE_PASSWORD || 'testtest' }}
+        run: ./gradlew assembleRelease --stacktrace
+
+      - name: Name APK with version
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk "dist/dc-inventory-${{ steps.version.outputs.name }}.apk"
+          rm -f "$RUNNER_TEMP/release.jks"
+
+      - name: Upload signed APK
+        if: steps.signing.outputs.official == 'true'
+        uses: actions/upload-artifact@v4
         with:
-          name: dc-inventory-debug-apk
+          name: dc-inventory-${{ steps.version.outputs.name }}
+          path: dist/*.apk
+
+      # Без постоянного ключа выкладываем debug-сборку, как раньше.
+      - name: Build debug APK
+        if: steps.signing.outputs.official != 'true'
+        run: ./gradlew assembleDebug
+
+      - name: Upload debug APK
+        if: steps.signing.outputs.official != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dc-inventory-${{ steps.version.outputs.name }}-debug
           path: app/build/outputs/apk/debug/*.apk
+
+      - name: Release notes from CHANGELOG.md
+        if: steps.signing.outputs.official == 'true' && github.event_name != 'pull_request'
+        run: |
+          awk -v v="## ${{ steps.version.outputs.name }}" '
+            $0 == v { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > dist/notes.md
+          cat dist/notes.md
+
+      # Страница версии на GitHub Releases с подписанным APK.
+      - name: Publish GitHub release
+        if: steps.signing.outputs.official == 'true' && github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.name }}
+          target_commitish: ${{ github.sha }}
+          name: Инвентаризация ЦОД ${{ steps.version.outputs.name }}
+          body_path: dist/notes.md
+          files: dist/*.apk
+          make_latest: true
