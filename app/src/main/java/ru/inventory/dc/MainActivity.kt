@@ -2,38 +2,57 @@ package ru.inventory.dc
 
 import android.graphics.Color
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import ru.inventory.dc.data.DbState
 import ru.inventory.dc.ui.AppViewModel
+import ru.inventory.dc.ui.DatabaseSetupScreen
 import ru.inventory.dc.ui.EditorScreen
 import ru.inventory.dc.ui.HistoryScreen
+import ru.inventory.dc.ui.LockScreen
 import ru.inventory.dc.ui.PlacementScreen
 import ru.inventory.dc.ui.SettingsScreen
 import ru.inventory.dc.ui.theme.DcInventoryTheme
 
 class MainActivity : ComponentActivity() {
+
+    private val vm: AppViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Конфиденциальные данные: запрет скриншотов и превью в списке недавних приложений.
+        window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         // Светлые иконки статус-бара поверх синей шапки.
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
         )
         setContent {
-            DcInventoryTheme { InventoryApp() }
+            DcInventoryTheme { AppRoot(vm) }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        vm.onAppForeground()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        vm.onAppBackground()
     }
 }
 
@@ -44,32 +63,33 @@ private object Routes {
     const val PLACEMENT = "placement"
 }
 
+/** Без базы — экран создания/открытия, база заблокирована — ввод пароля, иначе — приложение. */
 @Composable
-private fun InventoryApp(vm: AppViewModel = viewModel()) {
-    val nav = rememberNavController()
+private fun AppRoot(vm: AppViewModel) {
     val snackbar = remember { SnackbarHostState() }
-
     LaunchedEffect(Unit) {
         vm.messages.collect { snackbar.showSnackbar(it) }
     }
+    val state by vm.dbState.collectAsStateWithLifecycle()
+    when (state) {
+        DbState.NO_DATABASE -> DatabaseSetupScreen(vm, snackbar)
+        DbState.LOCKED -> LockScreen(vm, snackbar)
+        DbState.UNLOCKED -> InventoryApp(vm, snackbar)
+    }
+}
 
-    // При первом запуске спрашиваем место установки.
-    val startDestination = remember { if (vm.placement.value.chosen) Routes.EDITOR else Routes.PLACEMENT }
+@Composable
+private fun InventoryApp(vm: AppViewModel, snackbar: SnackbarHostState) {
+    val nav = rememberNavController()
+
+    // Место установки ещё не выбрано — спрашиваем его первым делом.
+    val startDestination = remember { if (vm.currentPlacement().chosen) Routes.EDITOR else Routes.PLACEMENT }
 
     NavHost(navController = nav, startDestination = startDestination) {
         composable(Routes.PLACEMENT) {
             val canGoBack = nav.previousBackStackEntry != null
-            // Первый запуск после переустановки: можно сразу восстановить всё из копии.
-            val restoreLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-                if (uri != null) vm.restoreBackup(uri)
-            }
-            LaunchedEffect(vm.restoreGeneration) {
-                if (vm.restoreGeneration > 0 && !canGoBack && vm.placement.value.chosen) {
-                    nav.navigate(Routes.EDITOR) { popUpTo(Routes.PLACEMENT) { inclusive = true } }
-                }
-            }
             PlacementScreen(
-                initial = vm.placement.value,
+                initial = vm.currentPlacement(),
                 canGoBack = canGoBack,
                 onBack = { nav.popBackStack() },
                 onDone = { placement ->
@@ -79,9 +99,6 @@ private fun InventoryApp(vm: AppViewModel = viewModel()) {
                     } else {
                         nav.navigate(Routes.EDITOR) { popUpTo(Routes.PLACEMENT) { inclusive = true } }
                     }
-                },
-                onRestore = if (canGoBack) null else {
-                    { restoreLauncher.launch(arrayOf("application/json", "application/octet-stream", "text/plain", "*/*")) }
                 },
             )
         }

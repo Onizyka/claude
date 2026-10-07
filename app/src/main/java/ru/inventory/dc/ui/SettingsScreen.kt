@@ -1,17 +1,15 @@
 package ru.inventory.dc.ui
 
-import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
-import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import ru.inventory.dc.data.BackupRepository
+import ru.inventory.dc.data.InventoryDatabase
 import ru.inventory.dc.data.formatDateTime
 import ru.inventory.dc.data.splitAddresses
 import androidx.compose.foundation.layout.Arrangement
@@ -76,13 +74,8 @@ fun SettingsScreen(
     snackbar: SnackbarHostState,
     onBack: () -> Unit,
 ) {
-    var s by remember { mutableStateOf(vm.settings.value) }
+    var s by remember { mutableStateOf(vm.currentSettings()) }
     var showPassword by remember { mutableStateOf(false) }
-
-    // После восстановления из копии перечитываем настройки.
-    LaunchedEffect(vm.restoreGeneration) {
-        if (vm.restoreGeneration > 0) s = vm.settings.value
-    }
 
     // Сохраняем при уходе с экрана, чтобы изменения не потерялись.
     val latest by rememberUpdatedState(s)
@@ -229,14 +222,12 @@ fun SettingsScreen(
                     value = s.recipients,
                     onChange = { s = s.copy(recipients = it) },
                     addLabel = "Добавить получателя",
-                    resetKey = vm.restoreGeneration,
                 )
                 AddressListEditor(
                     title = "Копия (CC)",
                     value = s.cc,
                     onChange = { s = s.copy(cc = it) },
                     addLabel = "Добавить копию",
-                    resetKey = vm.restoreGeneration,
                     startEmpty = true,
                 )
                 Field(
@@ -245,7 +236,10 @@ fun SettingsScreen(
                 )
             }
 
-            BackupSection(vm, beforeRestore = { vm.saveSettings(s, silent = true) })
+            DatabaseSection(vm, onLock = {
+                vm.saveSettings(s, silent = true)
+                vm.lockNow()
+            })
 
             Spacer(Modifier.height(8.dp))
         }
@@ -261,10 +255,9 @@ private fun AddressListEditor(
     value: String,
     onChange: (String) -> Unit,
     addLabel: String,
-    resetKey: Int,
     startEmpty: Boolean = false,
 ) {
-    var rows by remember(resetKey) {
+    var rows by remember {
         mutableStateOf(splitAddresses(value).ifEmpty { if (startEmpty) emptyList() else listOf("") })
     }
     fun update(newRows: List<String>) {
@@ -298,85 +291,111 @@ private fun AddressListEditor(
 }
 
 @Composable
-private fun BackupSection(vm: AppViewModel, beforeRestore: () -> Unit) {
-    val backup by vm.backupState.collectAsStateWithLifecycle()
-    var confirmRestore by remember { mutableStateOf<Uri?>(null) }
+private fun DatabaseSection(vm: AppViewModel, onLock: () -> Unit) {
+    val location by vm.dbLocation.collectAsStateWithLifecycle()
+    var changePassword by remember { mutableStateOf(false) }
 
     val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        if (uri != null) vm.setBackupFolder(uri)
+        if (uri != null) vm.moveDatabase(uri)
     }
-    val exportFile = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
-        if (uri != null) vm.exportBackup(uri)
-    }
-    val importFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) confirmRestore = uri
+    val exportFile = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+        if (uri != null) vm.exportCopy(uri)
     }
 
-    SectionCard("Резервная копия", Icons.Filled.Backup) {
+    SectionCard("База данных", Icons.Filled.Lock) {
         Text(
-            "Журнал, настройки почты, место установки и справочник оборудования сохраняются в файл " +
-                "${BackupRepository.FILE_NAME}. Файл остаётся на телефоне после удаления приложения — " +
-                "после переустановки нажмите «Восстановить». Фотографии в копию не входят.",
+            "Журнал, настройки почты (включая пароль SMTP), место установки и справочник хранятся " +
+                "в зашифрованной базе (AES-256). Фото и черновик тоже зашифрованы. Резервирование Android отключено.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        if (backup.folderUri == null) {
-            InfoBanner("Автокопия выключена. Выберите папку, например «Documents».")
+        if (location.fileUri == null) {
+            InfoBanner("Файл базы хранится только внутри приложения. Выберите папку, чтобы база пережила переустановку.", isError = true)
         } else {
-            val last = backup.lastBackupAt?.let { "последняя копия ${formatDateTime(it)}" } ?: "копия ещё не записана"
+            val synced = location.lastSyncAt?.let { "сохранено ${formatDateTime(it)}" } ?: "ещё не сохранялась"
             InfoBanner(
-                text = "Автокопия в папку «${backup.folderName ?: "выбрана"}»: $last" +
-                    (backup.lastError?.let { "\nОшибка: $it" } ?: ""),
-                isError = backup.lastError != null,
+                text = "Файл: ${location.displayPath ?: InventoryDatabase.FILE_NAME}\n$synced" +
+                    (location.lastError?.let { "\nОшибка: $it" } ?: ""),
+                isError = location.lastError != null,
             )
         }
         OutlinedButton(
-            onClick = { pickFolder.launch(null) },
+            onClick = { pickFolder.launch(InventoryDatabase.DEFAULT_FOLDER) },
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp),
         ) {
             Icon(Icons.Filled.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(6.dp))
-            Text(if (backup.folderUri == null) "Выбрать папку для автокопии" else "Сменить папку")
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Сохранять пароль SMTP в копии", style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    "Пароль будет записан в файл открытым текстом",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Switch(checked = backup.includePassword, onCheckedChange = vm::setBackupIncludePassword)
+            Text("Сохранить базу в другую папку")
         }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedButton(
-                onClick = { exportFile.launch(BackupRepository.FILE_NAME) },
+                onClick = { changePassword = true },
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(12.dp),
-            ) { Text("Экспорт") }
-            Button(
-                onClick = { importFile.launch(arrayOf("application/json", "application/octet-stream", "text/plain", "*/*")) },
+            ) { Text("Сменить пароль") }
+            OutlinedButton(
+                onClick = { exportFile.launch(InventoryDatabase.FILE_NAME) },
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(12.dp),
-            ) { Text("Восстановить") }
+            ) { Text("Копия базы") }
         }
-    }
-
-    confirmRestore?.let { uri ->
-        AlertDialog(
-            onDismissRequest = { confirmRestore = null },
-            title = { Text("Восстановить из копии?") },
-            text = { Text("Записи из файла добавятся в журнал, настройки почты и место установки будут заменены значениями из копии.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    beforeRestore()
-                    vm.restoreBackup(uri)
-                    confirmRestore = null
-                }) { Text("Восстановить") }
-            },
-            dismissButton = { TextButton(onClick = { confirmRestore = null }) { Text("Отмена") } },
+        Button(
+            onClick = onLock,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+        ) {
+            Icon(Icons.Filled.Lock, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("Заблокировать")
+        }
+        Text(
+            "Приложение блокируется само, если было свёрнуто дольше 5 минут.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+
+    if (changePassword) {
+        ChangePasswordDialog(vm, onDismiss = { changePassword = false })
+    }
+}
+
+@Composable
+private fun ChangePasswordDialog(vm: AppViewModel, onDismiss: () -> Unit) {
+    var old by remember { mutableStateOf("") }
+    var new by remember { mutableStateOf("") }
+    var confirm by remember { mutableStateOf("") }
+    val tooShort = new.isNotEmpty() && new.length < 8
+    val mismatch = confirm.isNotEmpty() && confirm != new
+    val canSave = old.isNotEmpty() && new.length >= 8 && new == confirm && !vm.busy
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Смена пароля") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                PasswordField(old, { old = it }, label = "Текущий пароль")
+                PasswordField(
+                    new, { new = it },
+                    label = "Новый пароль (от 8 символов)",
+                    isError = tooShort,
+                    supportingText = if (tooShort) "Слишком короткий" else null,
+                )
+                PasswordField(
+                    confirm, { confirm = it },
+                    label = "Повторите новый пароль",
+                    isError = mismatch,
+                    supportingText = if (mismatch) "Пароли не совпадают" else null,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { vm.changePassword(old, new) { ok -> if (ok) onDismiss() } },
+                enabled = canSave,
+            ) { Text(if (vm.busy) "Шифрование…" else "Сменить") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
+    )
 }

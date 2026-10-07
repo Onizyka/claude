@@ -2,68 +2,98 @@ package ru.inventory.dc.ui
 
 import android.app.Application
 import android.net.Uri
-import androidx.compose.runtime.snapshotFlow
+import android.os.SystemClock
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import ru.inventory.dc.data.BackupData
-import ru.inventory.dc.data.BackupRepository
-import ru.inventory.dc.data.BackupState
+import ru.inventory.dc.data.DatabaseContent
+import ru.inventory.dc.data.DbLocation
+import ru.inventory.dc.data.DbState
 import ru.inventory.dc.data.DictEntry
-import ru.inventory.dc.data.DictionaryRepository
 import ru.inventory.dc.data.EquipmentRecord
+import ru.inventory.dc.data.InventoryDatabase
+import ru.inventory.dc.data.LegacyData
 import ru.inventory.dc.data.ModelPreset
+import ru.inventory.dc.data.NotADatabaseException
 import ru.inventory.dc.data.PhotoStore
 import ru.inventory.dc.data.Placement
-import ru.inventory.dc.data.PlacementRepository
 import ru.inventory.dc.data.PortConnection
-import ru.inventory.dc.data.RecordRepository
 import ru.inventory.dc.data.SendStatus
-import ru.inventory.dc.data.SettingsRepository
 import ru.inventory.dc.data.SmtpSettings
+import ru.inventory.dc.data.VaultCrypto
+import ru.inventory.dc.data.WrongPasswordException
 import ru.inventory.dc.data.content
 import ru.inventory.dc.data.forEditing
+import ru.inventory.dc.data.forget
 import ru.inventory.dc.data.formatDateTime
 import ru.inventory.dc.data.hasOwnData
+import ru.inventory.dc.data.learn
 import ru.inventory.dc.data.normalized
 import ru.inventory.dc.mail.MailSender
 import ru.inventory.dc.mail.ReportBuilder
 
+/** Шаг первичной настройки: выбор, создание новой базы или открытие существующей. */
+enum class SetupMode { CHOOSE, CREATE, OPEN }
+
 @OptIn(kotlinx.coroutines.FlowPreview::class)
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val recordRepo = RecordRepository(app)
-    private val settingsRepo = SettingsRepository(app)
-    private val placementRepo = PlacementRepository(app)
-    private val dictionaryRepo = DictionaryRepository(app)
-    private val backupRepo = BackupRepository(app)
-    val photoStore = PhotoStore(app)
+    private val db = InventoryDatabase(app, viewModelScope)
+    private val legacy = LegacyData(app)
+    val photoStore = PhotoStore(app, db)
 
-    val records: StateFlow<List<EquipmentRecord>> = recordRepo.records
-    val settings: StateFlow<SmtpSettings> = settingsRepo.settings
-    val placement: StateFlow<Placement> = placementRepo.placement
-    val dictionary: StateFlow<List<DictEntry>> = dictionaryRepo.entries
-    val backupState: StateFlow<BackupState> = backupRepo.state
+    val dbState: StateFlow<DbState> = db.state
+    val dbLocation: StateFlow<DbLocation> = db.location
 
-    /** Увеличивается после восстановления из копии — экраны перечитывают данные. */
-    var restoreGeneration by mutableIntStateOf(0)
+    val records: StateFlow<List<EquipmentRecord>> = db.content.map { it.records }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    val settings: StateFlow<SmtpSettings> = db.content.map { it.settings }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, SmtpSettings())
+    val placement: StateFlow<Placement> = db.content.map { it.placement }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, Placement())
+    val dictionary: StateFlow<List<DictEntry>> = db.content.map { it.dictionary }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** Актуальные значения напрямую из базы (без задержки производных потоков). */
+    fun currentPlacement(): Placement = db.content.value.placement
+    fun currentSettings(): SmtpSettings = db.content.value.settings
+
+    // ---------- Состояние экранов входа ----------
+
+    var setupMode by mutableStateOf(SetupMode.CHOOSE)
+    var busy by mutableStateOf(false)
+        private set
+    var authError by mutableStateOf<String?>(null)
+
+    /** Выбранный файл базы, для которого ждём пароль. */
+    var openCandidate by mutableStateOf<Uri?>(null)
         private set
 
-    /** Запись, открытая в редакторе. Восстанавливается после перезапуска приложения. */
-    var draft by mutableStateOf(recordRepo.loadDraft()?.forEditing() ?: blankDraft(keepRack = false))
+    /** Данные незашифрованной копии старой версии, которые перенесём в новую базу. */
+    var pendingImport by mutableStateOf<DatabaseContent?>(null)
+        private set
+
+    val hasLegacyData: Boolean get() = legacy.exists()
+    val legacyFolder: Uri? get() = legacy.backupFolder
+
+    // ---------- Редактор ----------
+
+    var draft by mutableStateOf(EquipmentRecord.empty())
         private set
 
     var sending by mutableStateOf(false)
@@ -72,53 +102,228 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var processingPhotos by mutableStateOf(false)
         private set
 
-    init {
-        // Автосохранение черновика: данные не теряются, даже если система выгрузит приложение
-        // (например, пока открыта камера).
-        viewModelScope.launch {
-            snapshotFlow { draft }.drop(1).debounce(400).collect { recordRepo.saveDraftFile(it) }
-        }
-        viewModelScope.launch {
-            val used = records.value.flatMap { it.photos }.toSet() + draft.photos
-            photoStore.cleanup(keep = used)
-        }
-        // Справочник пустой (первый запуск новой версии) — наполняем из журнала.
-        viewModelScope.launch {
-            if (dictionary.value.isEmpty()) records.value.forEach { dictionaryRepo.learn(it) }
-        }
-        // Автоматическая резервная копия при любых изменениях данных.
-        viewModelScope.launch {
-            combine(records, settings, placement, dictionary, backupState) { _, _, _, _, b -> b.folderUri to b.includePassword }
-                .drop(1)
-                .debounce(3000)
-                .collect { (folder, _) -> if (folder != null) backupRepo.writeAuto(buildBackup()) }
-        }
-    }
-
-    private fun buildBackup(): BackupData {
-        val s = settings.value
-        return BackupData(
-            records = records.value,
-            settings = if (backupState.value.includePassword) s else s.copy(password = ""),
-            placement = placement.value,
-            dictionary = dictionary.value,
-        )
-    }
-
-    private fun blankDraft(keepRack: Boolean, previous: EquipmentRecord? = null): EquipmentRecord {
-        val p = placementRepo.placement.value
-        val rack = if (keepRack && previous != null && previous.rack.isNotBlank()) previous.rack else p.rack
-        return EquipmentRecord.empty().copy(site = p.site, room = p.hall, rack = rack)
-    }
-
     private val _messages = Channel<String>(Channel.BUFFERED)
     val messages: Flow<String> = _messages.receiveAsFlow()
+
+    private var backgroundSince = 0L
+
+    init {
+        // Черновик сохраняется (в зашифрованном виде), даже если система выгрузит приложение.
+        viewModelScope.launch {
+            snapshotFlow { draft }.drop(1).debounce(400).collect {
+                if (db.isUnlocked) db.saveDraft(it)
+            }
+        }
+    }
 
     fun post(message: String) {
         _messages.trySend(message)
     }
 
+    // ---------- Создание / открытие / вход ----------
+
+    fun createDatabase(password: String, folder: Uri?) {
+        if (busy) return
+        busy = true
+        authError = null
+        viewModelScope.launch {
+            val migrateLocal = legacy.exists()
+            val initial = pendingImport ?: if (migrateLocal) withContext(Dispatchers.IO) { legacy.load() } else DatabaseContent()
+            runCatching { db.create(password.toCharArray(), folder, initial) }
+                .onSuccess {
+                    if (migrateLocal) migrateLegacyPhotos()
+                    withContext(Dispatchers.IO) { legacy.wipe() }
+                    val imported = pendingImport != null || migrateLocal
+                    pendingImport = null
+                    onUnlocked()
+                    if (imported) post("Данные перенесены в зашифрованную базу: записей ${db.content.value.records.size}")
+                }
+                .onFailure { authError = "Не удалось создать базу: ${it.message}" }
+            busy = false
+        }
+    }
+
+    /** Пользователь выбрал файл: база — спросим пароль; старая незашифрованная копия — перенесём. */
+    fun pickExistingFile(uri: Uri) {
+        authError = null
+        viewModelScope.launch {
+            val bytes = runCatching { db.readUri(uri) }.getOrElse {
+                authError = "Не удалось открыть файл: ${it.message}"
+                return@launch
+            }
+            if (VaultCrypto.isDatabase(bytes)) {
+                openCandidate = uri
+                setupMode = SetupMode.OPEN
+                return@launch
+            }
+            val old = legacy.parseLegacyBackup(bytes)
+            if (old != null) {
+                pendingImport = old
+                setupMode = SetupMode.CREATE
+                post("Найдена незашифрованная копия (записей: ${old.records.size}). Задайте пароль — данные перейдут в новую базу.")
+            } else {
+                authError = NotADatabaseException().message
+            }
+        }
+    }
+
+    fun openDatabase(password: String) {
+        val uri = openCandidate ?: return
+        if (busy) return
+        busy = true
+        authError = null
+        viewModelScope.launch {
+            runCatching {
+                val bytes = db.readUri(uri)
+                db.open(uri, bytes, password.toCharArray())
+            }.onSuccess {
+                if (legacy.exists()) {
+                    // На телефоне остались данные старой версии — добавляем их в открытую базу.
+                    val old = withContext(Dispatchers.IO) { legacy.load() }
+                    db.update { c ->
+                        c.copy(
+                            records = mergeRecords(c.records, old.records),
+                            dictionary = old.records.fold(c.dictionary) { d, r -> d.learn(r) },
+                        )
+                    }
+                    migrateLegacyPhotos()
+                    withContext(Dispatchers.IO) { legacy.wipe() }
+                }
+                openCandidate = null
+                onUnlocked()
+            }.onFailure {
+                authError = when (it) {
+                    is WrongPasswordException -> "Неверный пароль"
+                    else -> "Не удалось открыть базу: ${it.message}"
+                }
+            }
+            busy = false
+        }
+    }
+
+    fun unlock(password: String) {
+        if (busy) return
+        busy = true
+        authError = null
+        viewModelScope.launch {
+            val ok = runCatching { db.unlock(password.toCharArray()) }.getOrElse {
+                authError = "Ошибка чтения базы: ${it.message}"
+                busy = false
+                return@launch
+            }
+            if (ok) {
+                onUnlocked()
+            } else {
+                authError = "Неверный пароль"
+            }
+            busy = false
+        }
+    }
+
+    fun lockNow() {
+        viewModelScope.launch {
+            if (db.isUnlocked) db.saveDraft(draft)
+            db.lock()
+            draft = EquipmentRecord.empty()
+            authError = null
+        }
+    }
+
+    /** «Забыли пароль»: локальная база удаляется, можно создать новую или открыть файл. */
+    fun resetDatabase() {
+        viewModelScope.launch {
+            db.resetLocal()
+            photoStore.deleteAll()
+            draft = EquipmentRecord.empty()
+            setupMode = SetupMode.CHOOSE
+            authError = null
+        }
+    }
+
+    fun cancelSetup() {
+        setupMode = SetupMode.CHOOSE
+        openCandidate = null
+        pendingImport = null
+        authError = null
+    }
+
+    fun onAppBackground() {
+        backgroundSince = SystemClock.elapsedRealtime()
+    }
+
+    /** Автоблокировка, если приложение было свёрнуто дольше [AUTO_LOCK_MS]. */
+    fun onAppForeground() {
+        val since = backgroundSince
+        backgroundSince = 0L
+        if (since > 0 && db.isUnlocked && SystemClock.elapsedRealtime() - since > AUTO_LOCK_MS) lockNow()
+    }
+
+    private suspend fun onUnlocked() {
+        val c = db.content.value
+        draft = db.loadDraft()?.forEditing() ?: blankDraft(keepRack = false)
+        if (c.dictionary.isEmpty() && c.records.isNotEmpty()) {
+            db.update { it.copy(dictionary = it.records.fold(it.dictionary) { d, r -> d.learn(r) }) }
+        }
+        val used = db.content.value.records.flatMap { it.photos }.toSet() + draft.photos
+        photoStore.cleanup(keep = used)
+    }
+
+    private suspend fun migrateLegacyPhotos() {
+        val renamed = photoStore.encryptLegacyPhotos()
+        if (renamed.isEmpty()) return
+        db.update { c ->
+            c.copy(records = c.records.map { r -> r.copy(photos = r.photos.map { renamed[it] ?: it }) })
+        }
+    }
+
+    private fun mergeRecords(current: List<EquipmentRecord>, incoming: List<EquipmentRecord>): List<EquipmentRecord> {
+        val byId = current.associateBy { it.id }.toMutableMap()
+        incoming.forEach { r ->
+            val existing = byId[r.id]
+            if (existing == null || r.updatedAt > existing.updatedAt) byId[r.id] = r
+        }
+        return byId.values.sortedByDescending { it.updatedAt }
+    }
+
+    private fun List<EquipmentRecord>.upsert(record: EquipmentRecord): List<EquipmentRecord> =
+        (filterNot { it.id == record.id } + record).sortedByDescending { it.updatedAt }
+
+    // ---------- Управление базой (настройки) ----------
+
+    fun changePassword(old: String, new: String, onDone: (Boolean) -> Unit) {
+        if (busy) return
+        busy = true
+        viewModelScope.launch {
+            val ok = runCatching { db.changePassword(old.toCharArray(), new.toCharArray()) }.getOrDefault(false)
+            busy = false
+            onDone(ok)
+            post(if (ok) "Пароль изменён" else "Текущий пароль указан неверно")
+        }
+    }
+
+    fun moveDatabase(folder: Uri) {
+        viewModelScope.launch {
+            runCatching { db.moveTo(folder) }
+                .onSuccess { post("База сохранена в новую папку") }
+                .onFailure { post("Не удалось сохранить базу в папку: ${it.message}") }
+        }
+    }
+
+    fun exportCopy(uri: Uri) {
+        viewModelScope.launch {
+            runCatching { db.exportCopy(uri) }
+                .onSuccess { post("Копия базы сохранена (тот же пароль)") }
+                .onFailure { post("Ошибка: ${it.message}") }
+        }
+    }
+
     // ---------- Редактор ----------
+
+    private fun blankDraft(keepRack: Boolean, previous: EquipmentRecord? = null): EquipmentRecord {
+        val p = currentPlacement()
+        val rack = if (keepRack && previous != null && previous.rack.isNotBlank()) previous.rack else p.rack
+        return EquipmentRecord.empty().copy(site = p.site, room = p.hall, rack = rack)
+    }
 
     fun updateDraft(transform: (EquipmentRecord) -> EquipmentRecord) {
         draft = transform(draft)
@@ -129,15 +334,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         draft = blankDraft(keepRack, previous = draft)
     }
 
-    // ---------- Место установки ----------
-
     fun setPlacement(p: Placement) {
-        placementRepo.save(p)
-        val saved = placementRepo.placement.value
+        val saved = p.trimmed().copy(chosen = true)
+        db.update { it.copy(placement = saved) }
         updateDraft { it.copy(site = saved.site, room = saved.hall, rack = saved.rack.ifBlank { it.rack }) }
     }
-
-    // ---------- Модель из справочника ----------
 
     fun applyModel(preset: ModelPreset) = updateDraft { r ->
         r.copy(
@@ -147,8 +348,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
-    // ---------- Фото ----------
-
     fun newCaptureUri(): Uri = photoStore.newCaptureUri()
 
     fun addPhotos(uris: List<Uri>) {
@@ -156,6 +355,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             processingPhotos = true
             val names = uris.mapNotNull { photoStore.import(it) }
+            photoStore.clearCaptures()
             processingPhotos = false
             if (names.isNotEmpty()) updateDraft { it.copy(photos = it.photos + names) }
             if (names.size < uris.size) post("Не удалось добавить фото: ${uris.size - names.size} шт.")
@@ -176,8 +376,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun addConnection() = updateDraft { r ->
         // Чаще всего подряд подключают порты к одному и тому же устройству — подставляем его.
-        val lastDevice = r.connections.lastOrNull()?.remoteDevice.orEmpty()
-        r.copy(connections = r.connections + PortConnection(remoteDevice = lastDevice))
+        val last = r.connections.lastOrNull()
+        r.copy(
+            connections = r.connections + PortConnection(
+                remoteDevice = last?.remoteDevice.orEmpty(),
+                cableType = last?.cableType.orEmpty(),
+            )
+        )
     }
 
     fun updateConnection(connection: PortConnection) = updateDraft { r ->
@@ -225,18 +430,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             post("Форма пустая — нечего сохранять")
             return
         }
-        viewModelScope.launch {
-            val stored = records.value.firstOrNull { it.id == record.id }
-            val saved = if (stored != null && stored.content() == record.content()) {
-                stored
-            } else {
-                record.copy(updatedAt = System.currentTimeMillis(), status = SendStatus.DRAFT, lastError = null)
-            }
-            recordRepo.upsert(saved)
-            dictionaryRepo.learn(saved)
-            draft = saved.forEditing()
-            post("Запись сохранена в журнал")
+        val stored = db.content.value.records.firstOrNull { it.id == record.id }
+        val saved = if (stored != null && stored.content() == record.content()) {
+            stored
+        } else {
+            record.copy(updatedAt = System.currentTimeMillis(), status = SendStatus.DRAFT, lastError = null)
         }
+        db.update { it.copy(records = it.records.upsert(saved), dictionary = it.dictionary.learn(saved)) }
+        draft = saved.forEditing()
+        post("Запись сохранена в базу")
     }
 
     // ---------- Отправка ----------
@@ -265,7 +467,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun deliver(record: EquipmentRecord, onDone: (EquipmentRecord, Boolean) -> Unit) {
         if (sending) return
-        val smtp = settings.value
+        val smtp = currentSettings()
         if (!smtp.isConfigured) {
             post("Укажите SMTP-сервер, отправителя и получателя в настройках")
             return
@@ -273,23 +475,28 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         sending = true
         viewModelScope.launch {
             val now = System.currentTimeMillis()
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    MailSender.send(
-                        settings = smtp,
-                        subject = ReportBuilder.subject(record, smtp.subjectPrefix, now),
-                        text = ReportBuilder.text(record, now),
-                        html = ReportBuilder.html(record, now),
-                        attachments = record.photos.map(photoStore::file),
-                    )
+            val attachments = photoStore.prepareMailFiles(record.photos)
+            val result = try {
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        MailSender.send(
+                            settings = smtp,
+                            subject = ReportBuilder.subject(record, smtp.subjectPrefix, now),
+                            text = ReportBuilder.text(record, now),
+                            html = ReportBuilder.html(record, now),
+                            attachments = attachments,
+                        )
+                    }
                 }
+            } finally {
+                // Расшифрованные копии фото не оставляем на диске.
+                photoStore.clearMailFiles()
             }
             val saved = result.fold(
                 onSuccess = { record.copy(updatedAt = now, status = SendStatus.SENT, sentAt = now, lastError = null) },
                 onFailure = { record.copy(updatedAt = now, status = SendStatus.FAILED, lastError = MailSender.describeError(it)) },
             )
-            recordRepo.upsert(saved)
-            dictionaryRepo.learn(saved)
+            db.update { it.copy(records = it.records.upsert(saved), dictionary = it.dictionary.learn(saved)) }
             sending = false
             onDone(saved, result.isSuccess)
             post(
@@ -300,22 +507,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun deleteRecord(id: String) {
-        viewModelScope.launch {
-            recordRepo.delete(id)
-            if (draft.id == id) newRecord(keepRack = true)
-            post("Запись удалена")
-        }
+        db.update { c -> c.copy(records = c.records.filterNot { it.id == id }) }
+        if (draft.id == id) newRecord(keepRack = true)
+        post("Запись удалена")
     }
 
     // ---------- Настройки ----------
 
     fun saveSettings(newSettings: SmtpSettings, silent: Boolean = false) {
-        settingsRepo.save(newSettings)
+        val value = newSettings.trimmed()
+        if (value != currentSettings()) db.update { it.copy(settings = value) }
         if (!silent) post("Настройки сохранены")
     }
 
     fun sendTest(newSettings: SmtpSettings) {
-        settingsRepo.save(newSettings)
+        saveSettings(newSettings, silent = true)
         if (sending) return
         if (!newSettings.isConfigured) {
             post("Заполните сервер, отправителя и получателя")
@@ -345,60 +551,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // ---------- Справочник ----------
-
     fun forgetSuggestion(entry: DictEntry) {
-        viewModelScope.launch { dictionaryRepo.remove(entry) }
-    }
-
-    // ---------- Резервная копия ----------
-
-    fun setBackupFolder(uri: Uri) {
-        runCatching { backupRepo.setFolder(uri) }
-            .onSuccess {
-                viewModelScope.launch {
-                    if (backupRepo.writeAuto(buildBackup())) post("Резервная копия сохранена")
-                    else post("Не удалось записать копию: ${backupState.value.lastError.orEmpty()}")
-                }
-            }
-            .onFailure { post("Не удалось выбрать папку: ${it.message}") }
-    }
-
-    fun setBackupIncludePassword(include: Boolean) = backupRepo.setIncludePassword(include)
-
-    fun exportBackup(uri: Uri) {
-        viewModelScope.launch {
-            runCatching { backupRepo.write(uri, buildBackup()) }
-                .onSuccess { post("Резервная копия сохранена в файл") }
-                .onFailure { post("Ошибка экспорта: ${it.message}") }
-        }
-    }
-
-    fun restoreBackup(uri: Uri) {
-        viewModelScope.launch {
-            val data = runCatching { backupRepo.read(uri) }.getOrElse {
-                post("Не удалось прочитать копию: ${it.message}")
-                return@launch
-            }
-            // Фото в копию не входят — убираем ссылки на отсутствующие файлы.
-            val restored = data.records.map { r -> r.copy(photos = r.photos.filter { photoStore.file(it).exists() }) }
-            recordRepo.mergeAll(restored)
-            val current = settings.value
-            settingsRepo.save(data.settings.copy(password = data.settings.password.ifEmpty { current.password }))
-            if (data.placement.chosen || data.placement.site.isNotBlank()) {
-                placementRepo.save(data.placement)
-                if (!draft.hasOwnData()) draft = blankDraft(keepRack = false)
-            }
-            dictionaryRepo.merge(data.dictionary)
-            restoreGeneration++
-            val passwordNote = if (data.settings.password.isEmpty() && current.password.isEmpty()) " Введите пароль SMTP в настройках." else ""
-            post("Восстановлено записей: ${data.records.size}.$passwordNote")
-        }
+        db.update { it.copy(dictionary = it.dictionary.forget(entry)) }
     }
 
     companion object {
         const val SCAN_INVENTORY = "inventory"
         const val SCAN_SERIAL_NEW = "serial:new"
         const val SCAN_SERIAL_PREFIX = "serial:"
+
+        /** Через сколько свёрнутое приложение блокируется. */
+        const val AUTO_LOCK_MS = 5 * 60 * 1000L
     }
 }

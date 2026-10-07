@@ -1,18 +1,6 @@
 package ru.inventory.dc.data
 
-import android.content.Context
-import android.util.Log
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.builtins.ListSerializer
-import kotlinx.serialization.json.Json
-import java.io.File
 
 /** Категории запоминаемых значений. */
 object DictCategory {
@@ -41,94 +29,37 @@ data class DictEntry(
             this.parent.equals(parent.trim(), ignoreCase = true)
 }
 
-/** Справочник часто используемого оборудования. Пополняется автоматически при сохранении и отправке. */
-class DictionaryRepository(context: Context) {
-
-    private val file = File(context.filesDir, "dictionary.json")
-    private val serializer = ListSerializer(DictEntry.serializer())
-    private val json = Json {
-        encodeDefaults = true
-        ignoreUnknownKeys = true
-    }
-    private val mutex = Mutex()
-
-    private val _entries = MutableStateFlow(load())
-    val entries: StateFlow<List<DictEntry>> = _entries.asStateFlow()
-
-    private fun load(): List<DictEntry> = try {
-        if (file.exists()) json.decodeFromString(serializer, file.readText()) else emptyList()
-    } catch (e: Exception) {
-        Log.e(TAG, "Не удалось прочитать справочник", e)
-        emptyList()
-    }
-
-    /** Запоминает значения из записи. */
-    suspend fun learn(record: EquipmentRecord) {
-        val now = System.currentTimeMillis()
-        val items = buildList {
-            add(Triple(DictCategory.TYPE, record.type, ""))
-            add(Triple(DictCategory.VENDOR, record.vendor, ""))
-            add(Triple(DictCategory.MODEL, record.model, record.vendor))
-            record.connections.forEach { c ->
-                add(Triple(DictCategory.DEVICE, c.remoteDevice, ""))
-                if (CABLE_TYPES.none { it.equals(c.cableType, ignoreCase = true) }) {
-                    add(Triple(DictCategory.CABLE, c.cableType, ""))
-                }
-            }
-        }.filter { it.second.isNotBlank() }
-            .distinctBy { Triple(it.first, it.second.lowercase(), it.third.lowercase()) }
-        if (items.isEmpty()) return
-        mutate { list ->
-            val result = list.toMutableList()
-            items.forEach { (category, value, parent) ->
-                val index = result.indexOfFirst { it.sameKey(category, value, parent) }
-                if (index >= 0) {
-                    val old = result[index]
-                    // Сохраняем последнее написание: «kraftway» → «Kraftway».
-                    result[index] = old.copy(value = value.trim(), count = old.count + 1, lastUsed = now)
-                } else {
-                    result += DictEntry(category, value.trim(), parent.trim(), 1, now)
-                }
-            }
-            result
-        }
-    }
-
-    suspend fun remove(entry: DictEntry) = mutate { list ->
-        list.filterNot { it.sameKey(entry.category, entry.value, entry.parent) }
-    }
-
-    /** Объединение с данными из резервной копии: счётчики берём максимальные. */
-    suspend fun merge(other: List<DictEntry>) = mutate { list ->
-        val result = list.toMutableList()
-        other.forEach { e ->
-            val index = result.indexOfFirst { it.sameKey(e.category, e.value, e.parent) }
-            if (index >= 0) {
-                val old = result[index]
-                result[index] = old.copy(count = maxOf(old.count, e.count), lastUsed = maxOf(old.lastUsed, e.lastUsed))
-            } else {
-                result += e
+/** Запоминает значения из записи (справочник пополняется при сохранении и отправке). */
+fun List<DictEntry>.learn(record: EquipmentRecord, now: Long = System.currentTimeMillis()): List<DictEntry> {
+    val items = buildList {
+        add(Triple(DictCategory.TYPE, record.type, ""))
+        add(Triple(DictCategory.VENDOR, record.vendor, ""))
+        add(Triple(DictCategory.MODEL, record.model, record.vendor))
+        record.connections.forEach { c ->
+            add(Triple(DictCategory.DEVICE, c.remoteDevice, ""))
+            if (CABLE_TYPES.none { it.equals(c.cableType, ignoreCase = true) }) {
+                add(Triple(DictCategory.CABLE, c.cableType, ""))
             }
         }
-        result
-    }
-
-    private suspend fun mutate(block: (List<DictEntry>) -> List<DictEntry>) = withContext(Dispatchers.IO) {
-        mutex.withLock {
-            val updated = block(_entries.value)
-            try {
-                file.writeText(json.encodeToString(serializer, updated))
-            } catch (e: Exception) {
-                Log.e(TAG, "Не удалось сохранить справочник", e)
-            }
-            _entries.value = updated
+    }.filter { it.second.isNotBlank() }
+        .distinctBy { Triple(it.first, it.second.trim().lowercase(), it.third.trim().lowercase()) }
+    if (items.isEmpty()) return this
+    val result = toMutableList()
+    items.forEach { (category, value, parent) ->
+        val index = result.indexOfFirst { it.sameKey(category, value, parent) }
+        if (index >= 0) {
+            val old = result[index]
+            // Сохраняем последнее написание: «kraftway» → «Kraftway».
+            result[index] = old.copy(value = value.trim(), count = old.count + 1, lastUsed = now)
+        } else {
+            result += DictEntry(category, value.trim(), parent.trim(), 1, now)
         }
     }
-
-    private companion object {
-        const val TAG = "DictionaryRepository"
-    }
+    return result
 }
+
+fun List<DictEntry>.forget(entry: DictEntry): List<DictEntry> =
+    filterNot { it.sameKey(entry.category, entry.value, entry.parent) }
 
 /**
  * Подсказки для поля: сначала совпадения с начала слова («kr» → Kraftway), затем по вхождению;

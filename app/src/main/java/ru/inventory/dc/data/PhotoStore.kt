@@ -11,19 +11,21 @@ import androidx.exifinterface.media.ExifInterface
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileOutputStream
+import java.io.ByteArrayOutputStream
 import java.util.UUID
 import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Фотографии оборудования: хранятся в памяти приложения уменьшенными до [MAX_SIDE] px,
- * чтобы письмо с несколькими снимками не было слишком тяжёлым.
+ * Фотографии оборудования: хранятся во внутренней памяти приложения в зашифрованном виде
+ * (ключ данных базы), уменьшенными до [MAX_SIDE] px, чтобы письмо не было слишком тяжёлым.
+ * Расшифрованные копии создаются только на время отправки письма и сразу удаляются.
  */
-class PhotoStore(private val context: Context) {
+class PhotoStore(private val context: Context, private val db: InventoryDatabase) {
 
     private val dir = File(context.filesDir, "photos").apply { mkdirs() }
     private val captureDir = File(context.cacheDir, "camera").apply { mkdirs() }
+    private val mailDir = File(context.cacheDir, "mail")
 
     fun file(name: String): File = File(dir, name)
 
@@ -50,8 +52,12 @@ class PhotoStore(private val context: Context) {
             val rotation = resolver.openInputStream(uri)?.use { ExifInterface(it).rotationDegrees } ?: 0
             val result = scaleAndRotate(decoded, rotation)
 
-            val name = "${UUID.randomUUID()}.jpg"
-            FileOutputStream(File(dir, name)).use { result.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, it) }
+            val jpeg = ByteArrayOutputStream().use {
+                result.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, it)
+                it.toByteArray()
+            }
+            val name = "${UUID.randomUUID()}.enc"
+            File(dir, name).writeBytes(db.encryptData(jpeg))
             name
         } catch (e: Exception) {
             Log.e(TAG, "Не удалось сохранить фото $uri", e)
@@ -59,15 +65,62 @@ class PhotoStore(private val context: Context) {
         }
     }
 
-    /** Миниатюра для показа в интерфейсе. */
+    /** Миниатюра для показа в интерфейсе (расшифровывается в памяти). */
     suspend fun thumbnail(name: String, size: Int): Bitmap? = withContext(Dispatchers.IO) {
-        val f = file(name)
-        if (!f.exists()) return@withContext null
+        val bytes = readPlain(name) ?: return@withContext null
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(f.path, bounds)
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         var sample = 1
         while (min(bounds.outWidth, bounds.outHeight) / (sample * 2) >= size) sample *= 2
-        BitmapFactory.decodeFile(f.path, BitmapFactory.Options().apply { inSampleSize = sample })
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
+    }
+
+    private fun readPlain(name: String): ByteArray? {
+        val f = file(name)
+        if (!f.exists()) return null
+        return runCatching {
+            // Фото старых версий (.jpg) ещё не зашифрованы — читаем как есть.
+            if (name.endsWith(".enc")) db.decryptData(f.readBytes()) else f.readBytes()
+        }.onFailure { Log.w(TAG, "Не удалось прочитать фото $name", it) }.getOrNull()
+    }
+
+    /** Временные расшифрованные копии для вложений письма. После отправки вызвать [clearMailFiles]. */
+    suspend fun prepareMailFiles(names: List<String>): List<File> = withContext(Dispatchers.IO) {
+        mailDir.mkdirs()
+        names.mapIndexedNotNull { i, name ->
+            val bytes = readPlain(name) ?: return@mapIndexedNotNull null
+            File(mailDir, "photo_${i + 1}.jpg").apply { writeBytes(bytes) }
+        }
+    }
+
+    suspend fun clearMailFiles() = withContext(Dispatchers.IO) {
+        mailDir.listFiles()?.forEach { it.delete() }
+    }
+
+    /** Снимок с камеры уже скопирован в зашифрованное хранилище — исходник удаляем сразу. */
+    suspend fun clearCaptures() = withContext(Dispatchers.IO) {
+        captureDir.listFiles()?.forEach { it.delete() }
+    }
+
+    /** Шифрует фото, оставшиеся от версий без шифрования. Возвращает соответствие старых и новых имён. */
+    suspend fun encryptLegacyPhotos(): Map<String, String> = withContext(Dispatchers.IO) {
+        val renamed = mutableMapOf<String, String>()
+        dir.listFiles { f -> f.name.endsWith(".jpg") }?.forEach { f ->
+            runCatching {
+                val newName = f.nameWithoutExtension + ".enc"
+                File(dir, newName).writeBytes(db.encryptData(f.readBytes()))
+                f.delete()
+                renamed[f.name] = newName
+            }.onFailure { Log.w(TAG, "Не удалось зашифровать ${f.name}", it) }
+        }
+        renamed
+    }
+
+    /** Полная очистка (сброс базы). */
+    suspend fun deleteAll() = withContext(Dispatchers.IO) {
+        dir.listFiles()?.forEach { it.delete() }
+        captureDir.listFiles()?.forEach { it.delete() }
+        mailDir.listFiles()?.forEach { it.delete() }
     }
 
     /** Удаляет снимки, на которые больше не ссылается ни одна запись. */
@@ -77,6 +130,7 @@ class PhotoStore(private val context: Context) {
             if (f.name !in keep && f.lastModified() < threshold) f.delete()
         }
         captureDir.listFiles()?.forEach { f -> if (f.lastModified() < threshold) f.delete() }
+        mailDir.listFiles()?.forEach { it.delete() }
     }
 
     private fun scaleAndRotate(bitmap: Bitmap, rotation: Int): Bitmap {
