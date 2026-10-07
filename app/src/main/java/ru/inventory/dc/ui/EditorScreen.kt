@@ -76,6 +76,7 @@ import ru.inventory.dc.data.DictCategory
 import ru.inventory.dc.data.DictEntry
 import ru.inventory.dc.data.PortConnection
 import ru.inventory.dc.data.SuggestionItem
+import ru.inventory.dc.data.racksOf
 import ru.inventory.dc.data.suggestions
 import ru.inventory.dc.data.VENDORS
 import ru.inventory.dc.data.findVendor
@@ -121,6 +122,11 @@ fun EditorScreen(
             dictionary.suggestions(DictCategory.MODEL, parent = draft.vendor.takeIf { it.isNotBlank() })
     }
     val deviceOptions = remember(dictionary) { dictionary.suggestions(DictCategory.DEVICE) }
+    val sites by vm.sites.collectAsStateWithLifecycle()
+    // Стойки текущего помещения — из справочника мест; новая стойка запомнится при сохранении.
+    val rackOptions = remember(sites, draft.site, draft.room) {
+        sites.racksOf(draft.site, draft.room).map { SuggestionItem(it) }
+    }
     val cableOptions = remember(dictionary) { dictionary.suggestions(DictCategory.CABLE) }
 
     var scanTarget by rememberSaveable { mutableStateOf<String?>(null) }
@@ -183,10 +189,13 @@ fun EditorScreen(
 
             // ---------- Размещение ----------
             SectionCard("Размещение", Icons.Filled.LocationOn) {
-                PlacementSummary(site = draft.site, hall = draft.room, onChange = onChangePlacement)
-                Field(
-                    draft.rack, { v -> vm.updateDraft { it.copy(rack = v) } },
+                PlacementSummary(site = draft.site, hall = draft.room, hallTitle = draft.roomTitle, onChange = onChangePlacement)
+                SuggestField(
+                    value = draft.rack,
+                    onValueChange = { v -> vm.updateDraft { it.copy(rack = v) } },
                     label = "Стойка",
+                    options = rackOptions,
+                    onSelect = { option -> vm.updateDraft { it.copy(rack = option.title) } },
                     capitalization = KeyboardCapitalization.Characters,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -403,7 +412,7 @@ fun EditorScreen(
         AlertDialog(
             onDismissRequest = { confirmNew = false },
             title = { Text("Новая запись") },
-            text = { Text("Очистить форму? ЦОД, машзал и стойка останутся.") },
+            text = { Text("Очистить форму? Место установки и стойка останутся.") },
             confirmButton = {
                 TextButton(onClick = {
                     vm.newRecord(keepRack = true)

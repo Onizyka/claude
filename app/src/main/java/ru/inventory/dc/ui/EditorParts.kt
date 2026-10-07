@@ -149,9 +149,9 @@ fun SuggestField(
     }
 }
 
-/** Плашка с текущим ЦОД и машзалом. */
+/** Плашка с текущим местом установки (площадка и помещение). */
 @Composable
-fun PlacementSummary(site: String, hall: String, onChange: () -> Unit) {
+fun PlacementSummary(site: String, hall: String, hallTitle: String, onChange: () -> Unit) {
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.primaryContainer,
@@ -159,8 +159,8 @@ fun PlacementSummary(site: String, hall: String, onChange: () -> Unit) {
     ) {
         Row(Modifier.padding(start = 14.dp, top = 8.dp, bottom = 8.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("ЦОД · машзал", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                val text = listOf(site, hallLabel(site, hall)).filter { it.isNotBlank() }.joinToString(" · ")
+                Text("Место установки", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val text = listOf(site, hallLabel(hallTitle, hall)).filter { it.isNotBlank() }.joinToString(" · ")
                 Text(
                     text.ifBlank { "Не выбрано" },
                     style = MaterialTheme.typography.titleMedium,

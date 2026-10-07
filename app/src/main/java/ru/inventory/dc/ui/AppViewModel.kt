@@ -34,6 +34,7 @@ import ru.inventory.dc.data.PhotoStore
 import ru.inventory.dc.data.Placement
 import ru.inventory.dc.data.PortConnection
 import ru.inventory.dc.data.SendStatus
+import ru.inventory.dc.data.Site
 import ru.inventory.dc.data.SmtpSettings
 import ru.inventory.dc.data.VaultCrypto
 import ru.inventory.dc.data.WrongPasswordException
@@ -43,6 +44,8 @@ import ru.inventory.dc.data.forget
 import ru.inventory.dc.data.formatDateTime
 import ru.inventory.dc.data.hasOwnData
 import ru.inventory.dc.data.learn
+import ru.inventory.dc.data.learnPlace
+import ru.inventory.dc.data.sitesFromHistory
 import ru.inventory.dc.data.normalized
 import ru.inventory.dc.mail.MailSender
 import ru.inventory.dc.mail.ReportBuilder
@@ -67,6 +70,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val placement: StateFlow<Placement> = db.content.map { it.placement }
         .stateIn(viewModelScope, SharingStarted.Eagerly, Placement())
     val dictionary: StateFlow<List<DictEntry>> = db.content.map { it.dictionary }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    val sites: StateFlow<List<Site>> = db.content.map { it.sites }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /** Актуальные значения напрямую из базы (без задержки производных потоков). */
@@ -261,6 +266,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun onUnlocked() {
         val c = db.content.value
         draft = db.loadDraft()?.forEditing() ?: blankDraft(keepRack = false)
+        if (c.sites.isEmpty() && (c.placement.site.isNotBlank() || c.records.any { it.site.isNotBlank() })) {
+            db.update { it.copy(sites = sitesFromHistory(it.placement, it.records)) }
+        }
         if (c.dictionary.isEmpty() && c.records.isNotEmpty()) {
             db.update { it.copy(dictionary = it.records.fold(it.dictionary) { d, r -> d.learn(r) }) }
         }
@@ -287,6 +295,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun List<EquipmentRecord>.upsert(record: EquipmentRecord): List<EquipmentRecord> =
         (filterNot { it.id == record.id } + record).sortedByDescending { it.updatedAt }
+
+    /** Запись в журнал + пополнение справочников оборудования и мест. */
+    private fun DatabaseContent.withRecord(record: EquipmentRecord): DatabaseContent = copy(
+        records = records.upsert(record),
+        dictionary = dictionary.learn(record),
+        sites = sites.learnPlace(record.site, record.room, record.rack, record.roomTitle),
+    )
+
+    /** Изменение справочника мест (экран «Место установки»). */
+    fun editSites(transform: (List<Site>) -> List<Site>) {
+        db.update { it.copy(sites = transform(it.sites)) }
+    }
 
     // ---------- Управление базой (настройки) ----------
 
@@ -322,22 +342,26 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private fun blankDraft(keepRack: Boolean, previous: EquipmentRecord? = null): EquipmentRecord {
         val p = currentPlacement()
         val rack = if (keepRack && previous != null && previous.rack.isNotBlank()) previous.rack else p.rack
-        return EquipmentRecord.empty().copy(site = p.site, room = p.hall, rack = rack)
+        return EquipmentRecord.empty().copy(site = p.site, room = p.hall, roomTitle = p.hallTitle, rack = rack)
     }
 
     fun updateDraft(transform: (EquipmentRecord) -> EquipmentRecord) {
         draft = transform(draft)
     }
 
-    /** Новая запись: ЦОД и машзал берутся из места установки; [keepRack] — оставить стойку. */
+    /** Новая запись: площадка и помещение берутся из места установки; [keepRack] — оставить стойку. */
     fun newRecord(keepRack: Boolean) {
         draft = blankDraft(keepRack, previous = draft)
     }
 
     fun setPlacement(p: Placement) {
         val saved = p.trimmed().copy(chosen = true)
-        db.update { it.copy(placement = saved) }
-        updateDraft { it.copy(site = saved.site, room = saved.hall, rack = saved.rack.ifBlank { it.rack }) }
+        db.update {
+            it.copy(placement = saved, sites = it.sites.learnPlace(saved.site, saved.hall, saved.rack, saved.hallTitle))
+        }
+        updateDraft {
+            it.copy(site = saved.site, room = saved.hall, roomTitle = saved.hallTitle, rack = saved.rack.ifBlank { it.rack })
+        }
     }
 
     fun applyModel(preset: ModelPreset) = updateDraft { r ->
@@ -436,7 +460,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             record.copy(updatedAt = System.currentTimeMillis(), status = SendStatus.DRAFT, lastError = null)
         }
-        db.update { it.copy(records = it.records.upsert(saved), dictionary = it.dictionary.learn(saved)) }
+        db.update { it.withRecord(saved) }
         draft = saved.forEditing()
         post("Запись сохранена в базу")
     }
@@ -496,7 +520,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 onSuccess = { record.copy(updatedAt = now, status = SendStatus.SENT, sentAt = now, lastError = null) },
                 onFailure = { record.copy(updatedAt = now, status = SendStatus.FAILED, lastError = MailSender.describeError(it)) },
             )
-            db.update { it.copy(records = it.records.upsert(saved), dictionary = it.dictionary.learn(saved)) }
+            db.update { it.withRecord(saved) }
             sending = false
             onDone(saved, result.isSuccess)
             post(

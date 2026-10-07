@@ -42,9 +42,10 @@ data class EquipmentRecord(
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = createdAt,
 
-    // Размещение: site — ЦОД, room — машзал
+    // Размещение: site — площадка, room — машзал/помещение, roomTitle — как оно называется
     val site: String = "",
     val room: String = "",
+    val roomTitle: String = "",
     val rack: String = "",
     val unit: String = "",
     val heightU: String = "",
@@ -123,7 +124,7 @@ fun EquipmentRecord.displayTitle(): String =
 
 fun EquipmentRecord.locationLine(): String = listOfNotNull(
     site.takeIf { it.isNotBlank() },
-    room.takeIf { it.isNotBlank() }?.let { hallLabel(site, it) },
+    room.takeIf { it.isNotBlank() }?.let { hallLabel(roomTitle, it) },
     rack.takeIf { it.isNotBlank() }?.let { "Стойка $it" },
     unit.takeIf { it.isNotBlank() }?.let { u ->
         val height = heightU.takeIf { it.isNotBlank() }?.let { " (${it}U)" }.orEmpty()
@@ -157,8 +158,8 @@ fun formatDateTime(millis: Long): String =
 
 val EQUIPMENT_TYPES = listOf("Сервер", "Коммутатор", "СХД", "Маршрутизатор", "Межсетевой экран", "ИБП (UPS)", "PDU", "Другое")
 
-/** Есть ли данные помимо места установки (ЦОД/машзал/стойка подставляются автоматически). */
-fun EquipmentRecord.hasOwnData(): Boolean = copy(site = "", room = "", rack = "").hasData()
+/** Есть ли данные помимо места установки (площадка/помещение/стойка подставляются автоматически). */
+fun EquipmentRecord.hasOwnData(): Boolean = copy(site = "", room = "", roomTitle = "", rack = "").hasData()
 
 // ---------- Маскировка IP для письма ----------
 

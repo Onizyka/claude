@@ -3,7 +3,7 @@ package ru.inventory.dc.mail
 import ru.inventory.dc.data.EquipmentRecord
 import ru.inventory.dc.data.displayTitle
 import ru.inventory.dc.data.formatDateTime
-import ru.inventory.dc.data.hallTitle
+import ru.inventory.dc.data.DEFAULT_HALL_TITLE
 import ru.inventory.dc.data.locationLine
 import ru.inventory.dc.data.maskedForEmail
 
@@ -16,8 +16,8 @@ object ReportBuilder {
         Section(
             "Размещение",
             listOf(
-                "ЦОД" to r.site,
-                hallTitle(r.site) to r.room,
+                "Площадка" to r.site,
+                r.roomTitle.ifBlank { DEFAULT_HALL_TITLE } to r.room,
                 "Стойка" to r.rack,
                 "Юнит" to r.unit,
                 "Высота, U" to r.heightU,

@@ -1,25 +1,13 @@
 package ru.inventory.dc.data
 
-/**
- * Справочник площадок. Чтобы добавить машзал или ЦОД — достаточно поправить этот список.
- * [hallTitle] — как называется помещение на площадке: машзал в ЦОД, помещение в офисе.
- */
-data class DataCenter(val name: String, val halls: List<String>, val hallTitle: String = "Машзал")
+/** Как называются помещения на площадке — выбирается для каждой площадки. */
+const val DEFAULT_HALL_TITLE = "Машзал"
+val HALL_TITLES = listOf("Машзал", "Помещение")
 
-val DATA_CENTERS = listOf(
-    DataCenter("оЦОД", listOf("2", "4", "5", "9")),
-    DataCenter("рЦОД", emptyList()),
-    DataCenter("Офис", listOf("949", "1416"), hallTitle = "Помещение"),
-)
-
-/** Название помещения для площадки: «Машзал» или «Помещение». */
-fun hallTitle(site: String): String =
-    DATA_CENTERS.firstOrNull { it.name.equals(site.trim(), ignoreCase = true) }?.hallTitle ?: "Машзал"
-
-/** «5» → «Машзал 5», в офисе «949» → «Помещение 949»; произвольный текст оставляем как есть. */
-fun hallLabel(site: String, hall: String): String {
+/** «5» → «Машзал 5»; произвольный текст («Серверная») оставляем как есть. */
+fun hallLabel(title: String, hall: String): String {
     val h = hall.trim()
-    return if (h.isNotEmpty() && h.all { it.isDigit() }) "${hallTitle(site)} $h" else h
+    return if (h.isNotEmpty() && h.all { it.isDigit() }) "${title.ifBlank { DEFAULT_HALL_TITLE }} $h" else h
 }
 
 /** Варианты кабеля в подключениях; третий вариант — ввести своё значение. */

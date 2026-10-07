@@ -105,6 +105,7 @@ private fun InventoryApp(vm: AppViewModel, snackbar: SnackbarHostState) {
         composable(Routes.PLACEMENT) {
             val canGoBack = nav.previousBackStackEntry != null
             PlacementScreen(
+                vm = vm,
                 initial = vm.currentPlacement(),
                 canGoBack = canGoBack,
                 onBack = { nav.popBackStack() },

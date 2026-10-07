@@ -52,10 +52,12 @@ data class Placement(
     val site: String = "",
     val hall: String = "",
     val rack: String = "",
+    /** «Машзал» или «Помещение» — берётся из площадки. */
+    val hallTitle: String = DEFAULT_HALL_TITLE,
     /** Пользователь уже проходил экран выбора места. */
     val chosen: Boolean = false,
 ) {
-    fun summary(): String = listOf(site, hallLabel(site, hall), rack.takeIf { it.isNotBlank() }?.let { "Стойка $it" }.orEmpty())
+    fun summary(): String = listOf(site, hallLabel(hallTitle, hall), rack.takeIf { it.isNotBlank() }?.let { "Стойка $it" }.orEmpty())
         .filter { it.isNotBlank() }
         .joinToString(" · ")
 

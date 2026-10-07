@@ -37,6 +37,8 @@ data class DatabaseContent(
     val settings: SmtpSettings = SmtpSettings(),
     val placement: Placement = Placement(),
     val dictionary: List<DictEntry> = emptyList(),
+    /** Площадки, помещения и стойки, которые ведёт пользователь. */
+    val sites: List<Site> = emptyList(),
 )
 
 enum class DbState { NO_DATABASE, LOCKED, UNLOCKED }
