@@ -39,19 +39,10 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
-        <!-- Сканер с зумом и фонариком -->
+        <!-- Сканер кодов (CameraX + ML Kit) -->
         <activity
             android:name=".ui.ScannerActivity"
             android:exported="false"
-            android:screenOrientation="fullSensor"
-            android:stateNotNeeded="true"
-            android:theme="@style/zxing_CaptureTheme"
-            android:windowSoftInputMode="stateAlwaysHidden" />
-
-        <!-- Стандартный сканер из zxing-android-embedded: разрешаем портретную ориентацию -->
-        <activity
-            android:name="com.journeyapps.barcodescanner.CaptureActivity"
-            android:screenOrientation="fullSensor"
-            tools:replace="screenOrientation" />
+            android:theme="@style/Theme.DcInventory" />
     </application>
 </manifest>

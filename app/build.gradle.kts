@@ -9,7 +9,7 @@ plugins {
  * Версия приложения. Повышается при каждом изменении (см. CHANGELOG.md):
  * новая функция — средняя цифра (2.1.0 → 2.2.0), исправление — последняя (2.1.0 → 2.1.1).
  */
-val appVersion = "2.2.0"
+val appVersion = "2.3.0"
 
 /** 2.1.0 → 20100: код версии растёт вместе с номером. */
 fun versionCodeOf(version: String): Int {
@@ -27,6 +27,10 @@ android {
         targetSdk = 35
         versionCode = versionCodeOf(appVersion)
         versionName = appVersion
+        // Только процессоры телефонов — меньше размер APK с моделью распознавания.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     // Ключ подписи передаётся сборке через переменные окружения (в GitHub — из секретов),
@@ -99,8 +103,13 @@ dependencies {
 
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
-    // Сканирование QR-кодов и штрихкодов (работает без Google Play Services)
-    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    // Сканер: CameraX + ML Kit со встроенной моделью (без интернета и сервисов Google)
+    val cameraX = "1.4.1"
+    implementation("androidx.camera:camera-camera2:$cameraX")
+    implementation("androidx.camera:camera-lifecycle:$cameraX")
+    implementation("androidx.camera:camera-view:$cameraX")
+    implementation("androidx.camera:camera-mlkit-vision:$cameraX")
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
 
     // Отправка почты по SMTP
     implementation("com.sun.mail:android-mail:1.6.7")

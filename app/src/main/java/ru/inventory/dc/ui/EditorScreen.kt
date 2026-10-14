@@ -68,8 +68,6 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanOptions
 import ru.inventory.dc.data.EQUIPMENT_TYPES
 import ru.inventory.dc.data.CABLE_TYPES
 import ru.inventory.dc.data.DictCategory
@@ -84,13 +82,6 @@ import ru.inventory.dc.data.SendStatus
 import ru.inventory.dc.data.formatDateTime
 import ru.inventory.dc.data.hasOwnData
 import ru.inventory.dc.data.isValidIp
-
-private fun scanOptions(): ScanOptions = ScanOptions().apply {
-    setPrompt("Наведите камеру на QR-код или штрихкод")
-    setBeepEnabled(true)
-    setOrientationLocked(false)
-    setCaptureActivity(ScannerActivity::class.java)
-}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -130,15 +121,20 @@ fun EditorScreen(
     val cableOptions = remember(dictionary) { dictionary.suggestions(DictCategory.CABLE) }
 
     var scanTarget by rememberSaveable { mutableStateOf<String?>(null) }
-    val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
-        val value = result.contents?.trim().orEmpty()
+    val scanLauncher = rememberLauncherForActivityResult(ScanCodeContract()) { result ->
+        val value = result?.trim().orEmpty()
         val target = scanTarget
         scanTarget = null
         if (value.isNotEmpty() && target != null) vm.applyScan(target, value)
     }
     val scan: (String) -> Unit = { target ->
         scanTarget = target
-        scanLauncher.launch(scanOptions())
+        scanLauncher.launch(
+            when {
+                target == AppViewModel.SCAN_INVENTORY -> "Инвентарный номер"
+                else -> "Серийный номер"
+            }
+        )
     }
 
     Scaffold(
