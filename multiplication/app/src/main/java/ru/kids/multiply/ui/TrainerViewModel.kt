@@ -19,6 +19,7 @@ import ru.kids.multiply.game.QuestionGenerator
 sealed interface Screen {
     data object Menu : Screen
     data class Intro(val table: Int) : Screen
+    data object Mistakes : Screen
     data object Game : Screen
     data object Result : Screen
 }
@@ -27,6 +28,8 @@ sealed interface Screen {
 data class Round(
     val mode: Mode,
     val table: Int,
+    /** Уровень, ошибки которого прорабатываются (для [Mode.MISTAKES]). */
+    val focus: Mode?,
     val questions: List<Question>,
     val totalMs: Long,
     val timeLeftMs: Long = totalMs,
@@ -67,7 +70,8 @@ class TrainerViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var questionCount by mutableIntStateOf(progress.questionCount)
         private set
-    var mistakesCount by mutableIntStateOf(progress.mistakesCount())
+    /** Сколько примеров с ошибками на каждом уровне. */
+    var mistakeCounts by mutableStateOf(progress.mistakeCounts())
         private set
     private var stars by mutableStateOf(progress.allStars())
 
@@ -90,24 +94,37 @@ class TrainerViewModel(app: Application) : AndroidViewModel(app) {
         screen = Screen.Intro(table)
     }
 
-    fun start(mode: Mode, table: Int = 0) {
+    fun openMistakes() {
+        job?.cancel()
+        paused = false
+        round = null
+        mistakeCounts = progress.mistakeCounts()
+        screen = Screen.Mistakes
+    }
+
+    fun start(mode: Mode, table: Int = 0, focus: Mode? = null) {
         val mistakes = progress.mistakes()
         val expressionMistakes = progress.expressionMistakes()
         // Если трудных примеров мало, тренировка короче, чтобы один пример не шёл по кругу.
         val count = if (mode == Mode.MISTAKES) {
-            minOf(questionCount, (mistakes.size + expressionMistakes.size) * 3)
+            val available = focus?.let { progress.mistakeCounts()[it] } ?: (mistakes.size + expressionMistakes.size)
+            minOf(questionCount, available * 3)
         } else questionCount
         val questions = QuestionGenerator(mistakes = mistakes, expressionMistakes = expressionMistakes)
-            .session(mode, table, count)
-        if (questions.isEmpty()) return
-        round = Round(mode, table, questions, totalMs = seconds * 1000L)
+            .session(mode, table, count, focus)
+        if (questions.isEmpty()) {
+            // Все ошибки уже исправлены — возвращаемся к списку уровней.
+            if (mode == Mode.MISTAKES) openMistakes()
+            return
+        }
+        round = Round(mode, table, focus, questions, totalMs = seconds * 1000L)
         screen = Screen.Game
         startTimer()
     }
 
     fun restart() {
         val r = round ?: return
-        start(r.mode, r.table)
+        start(r.mode, r.table, r.focus)
     }
 
     fun answer(option: Int) {
@@ -117,11 +134,16 @@ class TrainerViewModel(app: Application) : AndroidViewModel(app) {
         resolve(option)
     }
 
+    /** Выход из тренировки: из работы над ошибками — к списку уровней, иначе в меню. */
+    fun leaveRound() {
+        if (round?.mode == Mode.MISTAKES) openMistakes() else toMenu()
+    }
+
     fun toMenu() {
         job?.cancel()
         paused = false
         round = null
-        mistakesCount = progress.mistakesCount()
+        mistakeCounts = progress.mistakeCounts()
         screen = Screen.Menu
     }
 
@@ -195,7 +217,7 @@ class TrainerViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             progress.saveStars(r.mode, r.table, r.stars)
             stars = progress.allStars()
-            mistakesCount = progress.mistakesCount()
+            mistakeCounts = progress.mistakeCounts()
             screen = Screen.Result
         }
     }

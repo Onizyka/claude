@@ -21,6 +21,7 @@ import ru.kids.multiply.game.Mode
 import ru.kids.multiply.ui.GameScreen
 import ru.kids.multiply.ui.IntroScreen
 import ru.kids.multiply.ui.MenuScreen
+import ru.kids.multiply.ui.MistakesScreen
 import ru.kids.multiply.ui.MultiplicationTheme
 import ru.kids.multiply.ui.ResultScreen
 import ru.kids.multiply.ui.Screen
@@ -57,13 +58,17 @@ private fun App(vm: TrainerViewModel = viewModel()) {
                         onBack = vm::toMenu,
                     )
                 }
-                Screen.Game -> {
+                Screen.Mistakes -> {
                     BackHandler { vm.toMenu() }
-                    vm.round?.let { GameScreen(it, onAnswer = vm::answer, onQuit = vm::toMenu) }
+                    MistakesScreen(vm)
+                }
+                Screen.Game -> {
+                    BackHandler { vm.leaveRound() }
+                    vm.round?.let { GameScreen(it, onAnswer = vm::answer, onQuit = vm::leaveRound) }
                 }
                 Screen.Result -> {
-                    BackHandler { vm.toMenu() }
-                    vm.round?.let { ResultScreen(it, onAgain = vm::restart, onMenu = vm::toMenu) }
+                    BackHandler { vm.leaveRound() }
+                    vm.round?.let { ResultScreen(it, onAgain = vm::restart, onMenu = vm::leaveRound) }
                 }
             }
         }

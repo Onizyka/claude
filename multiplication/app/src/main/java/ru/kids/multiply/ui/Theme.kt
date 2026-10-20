@@ -12,6 +12,7 @@ object Palette {
     val Good = Color(0xFF2BB673)
     val Bad = Color(0xFFE5484D)
     val Gold = Color(0xFFFFB800)
+    val Disabled = Color(0xFFB8B5C4)
 
     /** Свой цвет у каждой таблицы — так проще запомнить. */
     private val tables = listOf(

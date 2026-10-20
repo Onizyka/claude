@@ -29,7 +29,7 @@ fun ResultScreen(round: Round, onAgain: () -> Unit, onMenu: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(modeTitle(round.mode, round.table), style = MaterialTheme.typography.titleMedium)
+        Text(modeTitle(round.mode, round.table, round.focus), style = MaterialTheme.typography.titleMedium)
         Text(
             text = when (round.stars) {
                 3 -> "🏆"

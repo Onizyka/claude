@@ -84,10 +84,10 @@ fun <T> ChoiceRow(options: List<T>, selected: T, label: (T) -> String, onSelect:
     }
 }
 
-fun modeTitle(mode: Mode, table: Int): String = when (mode) {
+fun modeTitle(mode: Mode, table: Int, focus: Mode? = null): String = when (mode) {
     Mode.TABLE -> "Таблица на $table"
     Mode.MIXED -> "Всё вперемешку"
     Mode.HARD -> "Сложный уровень"
-    Mode.MISTAKES -> "Работа над ошибками"
+    Mode.MISTAKES -> focus?.let { "${modeTitle(it, table)} (работа над ошибками)" } ?: "Работа над ошибками"
     Mode.BRACKETS -> "Примеры со скобками"
 }

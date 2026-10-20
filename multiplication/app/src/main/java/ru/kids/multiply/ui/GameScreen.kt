@@ -54,7 +54,7 @@ fun GameScreen(round: Round, onAnswer: (Int) -> Unit, onQuit: () -> Unit) {
             text = when {
                 round.question.isRepeat -> "Попробуй ещё раз"
                 round.streak >= 3 -> "🔥 ${round.streak} подряд!"
-                else -> modeTitle(round.mode, round.table)
+                else -> modeTitle(round.mode, round.table, round.focus)
             },
             fontSize = 18.sp,
             color = if (round.question.isRepeat) Palette.Orange else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),

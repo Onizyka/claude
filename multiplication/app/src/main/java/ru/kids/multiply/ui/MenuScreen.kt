@@ -72,19 +72,17 @@ fun MenuScreen(vm: TrainerViewModel) {
             color = Palette.table(9),
             stars = vm.stars(Mode.BRACKETS),
         ) { vm.start(Mode.BRACKETS) }
-        // Кнопка видна всегда; пока ошибок нет, она серая и объясняет, что здесь появится.
-        val hasMistakes = vm.mistakesCount > 0
+        val mistakesTotal = vm.mistakeCounts.values.sum()
         ModeButton(
             title = "Работа над ошибками",
-            subtitle = if (hasMistakes) {
-                "Примеров, где были ошибки: ${vm.mistakesCount}"
+            subtitle = if (mistakesTotal > 0) {
+                "Примеров, где были ошибки: $mistakesTotal"
             } else {
                 "Пока ошибок нет. Здесь соберутся примеры, в которых ты ошибёшься"
             },
-            color = if (hasMistakes) Palette.Orange else Color(0xFFB8B5C4),
+            color = if (mistakesTotal > 0) Palette.Orange else Palette.Disabled,
             stars = null,
-            enabled = hasMistakes,
-        ) { vm.start(Mode.MISTAKES) }
+        ) { vm.openMistakes() }
 
         SectionTitle("Настройки")
         Text("Время на ответ", style = MaterialTheme.typography.titleMedium)
@@ -103,7 +101,7 @@ fun MenuScreen(vm: TrainerViewModel) {
 }
 
 @Composable
-private fun SectionTitle(text: String) {
+fun SectionTitle(text: String) {
     Text(
         text = text,
         modifier = Modifier.padding(top = 8.dp),
@@ -131,7 +129,7 @@ private fun TableCell(n: Int, stars: Int, modifier: Modifier, onClick: () -> Uni
 }
 
 @Composable
-private fun ModeButton(
+fun ModeButton(
     title: String,
     subtitle: String,
     color: Color,

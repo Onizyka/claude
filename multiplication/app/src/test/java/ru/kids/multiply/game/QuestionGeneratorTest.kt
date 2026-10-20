@@ -109,6 +109,22 @@ class QuestionGeneratorTest {
     }
 
     @Test
+    fun mistakesAreSplitByLevel() {
+        val expression = Expression("(7 + 5) × 3", 36, 22)
+        val generator = QuestionGenerator(Random(10), mapOf("7x8" to 2, "8x10" to 1, "12x15" to 2, "11x11" to 1), mapOf(expression to 2))
+
+        val mixed = generator.session(Mode.MISTAKES, 0, 12, focus = Mode.MIXED).map { it.key }.toSet()
+        assertEquals(setOf("7x8", "8x10"), mixed)
+        val hard = generator.session(Mode.MISTAKES, 0, 12, focus = Mode.HARD).map { it.key }.toSet()
+        assertEquals(setOf("12x15", "11x11"), hard)
+        val brackets = generator.session(Mode.MISTAKES, 0, 6, focus = Mode.BRACKETS).map { it.key }.toSet()
+        assertEquals(setOf("(7 + 5) × 3"), brackets)
+
+        assertEquals(Mode.MIXED, Fact(10, 7).level)
+        assertEquals(Mode.HARD, Fact(10, 10).level)
+    }
+
+    @Test
     fun factKeyIgnoresOrder() {
         assertEquals(Fact(8, 7).key, Fact(7, 8).key)
         assertEquals(Fact(7, 8), Fact.fromKey("7x8"))

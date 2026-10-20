@@ -33,7 +33,15 @@ class Progress(context: Context) {
         }
         .toMap()
 
-    fun mistakesCount(): Int = mistakes().size + expressionMistakes().size
+    /** Сколько примеров с ошибками на каждом уровне: MIXED, HARD, BRACKETS. */
+    fun mistakeCounts(): Map<Mode, Int> {
+        val facts = mistakes().keys.mapNotNull(Fact::fromKey)
+        return mapOf(
+            Mode.MIXED to facts.count { it.level == Mode.MIXED },
+            Mode.HARD to facts.count { it.level == Mode.HARD },
+            Mode.BRACKETS to expressionMistakes().size,
+        )
+    }
 
     /** Ошибка добавляет 2, верный ответ убирает 1: пример уходит из «трудных» после двух верных ответов. */
     fun record(question: Question, correct: Boolean) {

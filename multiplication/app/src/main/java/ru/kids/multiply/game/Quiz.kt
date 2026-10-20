@@ -29,6 +29,9 @@ data class Fact(val a: Int, val b: Int) {
     /** 7 × 8 и 8 × 7 — один и тот же пример для статистики ошибок. */
     val key: String get() = "${min(a, b)}x${max(a, b)}"
 
+    /** К какому уровню относится пример: двузначные — «Сложный уровень», остальное — таблица («Всё вперемешку»). */
+    val level: Mode get() = if (a >= 10 && b >= 10) Mode.HARD else Mode.MIXED
+
     companion object {
         fun fromKey(key: String): Fact? {
             val parts = key.split("x")
@@ -66,20 +69,25 @@ class QuestionGenerator(
     private val expressionMistakes: Map<Expression, Int> = emptyMap(),
 ) {
 
-    fun session(mode: Mode, table: Int, count: Int): List<Question> = when (mode) {
+    /** [focus] для работы над ошибками: MIXED, HARD или BRACKETS; null — все ошибки. */
+    fun session(mode: Mode, table: Int, count: Int, focus: Mode? = null): List<Question> = when (mode) {
         Mode.TABLE -> deck(tableFacts(table), count).map { question(it, swapChance = 0.25) }
         Mode.MIXED -> weighted(mixedFacts(), count).map { question(it) }
         Mode.HARD -> hard(count)
-        Mode.MISTAKES -> mistakesSession(count)
+        Mode.MISTAKES -> mistakesSession(count, focus)
         Mode.BRACKETS -> ExpressionGenerator(random).let { generator -> List(count) { question(generator.next()) } }
     }
 
     private class MistakeItem(val key: String, val weight: Int, val make: () -> Question)
 
-    /** Работа над ошибками: примеры из таблицы и со скобками; где ошибок больше — те чаще. */
-    private fun mistakesSession(count: Int): List<Question> {
-        val facts = mistakeFacts().map { fact -> MistakeItem(fact.key, mistakes[fact.key] ?: 1) { question(fact) } }
-        val expressions = expressionMistakes.map { (e, weight) -> MistakeItem(e.text, weight) { question(e) } }
+    /** Работа над ошибками выбранного уровня; где ошибок больше — те примеры чаще. */
+    private fun mistakesSession(count: Int, focus: Mode?): List<Question> {
+        val facts = mistakeFacts()
+            .filter { focus == null || it.level == focus }
+            .map { fact -> MistakeItem(fact.key, mistakes[fact.key] ?: 1) { question(fact) } }
+        val expressions = if (focus == null || focus == Mode.BRACKETS) {
+            expressionMistakes.map { (e, weight) -> MistakeItem(e.text, weight) { question(e) } }
+        } else emptyList()
         return weightedBy(facts + expressions, count, { it.key }) { 1 + 3 * it.weight }.map { it.make() }
     }
 
