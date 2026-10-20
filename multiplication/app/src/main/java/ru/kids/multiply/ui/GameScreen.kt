@@ -25,13 +25,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 
 private val praise = listOf("Верно!", "Молодец!", "Отлично!", "Так держать!", "Супер!")
 
 @Composable
 fun GameScreen(round: Round, onAnswer: (Int) -> Unit, onQuit: () -> Unit) {
-    val fact = round.question.fact
+    val question = round.question
 
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -58,12 +59,20 @@ fun GameScreen(round: Round, onAnswer: (Int) -> Unit, onQuit: () -> Unit) {
             fontSize = 18.sp,
             color = if (round.question.isRepeat) Palette.Orange else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
         )
-        val example = "${fact.a} × ${fact.b} = " + if (round.isAnswered) "${fact.answer}" else "?"
+        val result = if (round.isAnswered) "${question.answer}" else "?"
+        val withBrackets = '(' in question.text
+        // Пример со скобками длинный: «= ?» уходит на вторую строку.
+        val example = if (withBrackets) "${question.text}\n= $result" else "${question.text} = $result"
         Text(
             text = example,
-            // «16 × 16 = 256» крупным шрифтом не помещается на узком экране.
-            fontSize = if (example.length > 10) 44.sp else 56.sp,
-            maxLines = 1,
+            // «16 × 16 = 256» и длинные примеры со скобками крупным шрифтом не помещаются на узком экране.
+            fontSize = when {
+                question.text.length > 13 -> 34.sp
+                withBrackets || example.length > 10 -> 44.sp
+                else -> 56.sp
+            },
+            maxLines = 2,
+            lineHeight = 1.15.em,
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center,
         )
@@ -125,7 +134,7 @@ private fun TimerBar(leftMs: Long, totalMs: Long) {
 
 @Composable
 private fun AnswerButton(option: Int, round: Round, modifier: Modifier, onClick: () -> Unit) {
-    val answer = round.question.fact.answer
+    val answer = round.question.answer
     val color = when {
         !round.isAnswered -> MaterialTheme.colorScheme.primary
         option == answer -> Palette.Good

@@ -11,7 +11,6 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import ru.kids.multiply.game.Fact
 import ru.kids.multiply.game.Mode
 import ru.kids.multiply.game.Progress
 import ru.kids.multiply.game.Question
@@ -36,14 +35,14 @@ data class Round(
     val answered: Int = 0,
     val streak: Int = 0,
     val bestStreak: Int = 0,
-    val mistakes: List<Fact> = emptyList(),
+    val mistakes: List<Question> = emptyList(),
     /** Выбранный ответ; null — ещё не ответили или время вышло. */
     val chosen: Int? = null,
     val timedOut: Boolean = false,
 ) {
     val question: Question get() = questions[index]
     val isAnswered: Boolean get() = chosen != null || timedOut
-    val isCorrect: Boolean get() = chosen == question.fact.answer
+    val isCorrect: Boolean get() = chosen == question.answer
 
     val stars: Int
         get() {
@@ -154,16 +153,16 @@ class TrainerViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun resolve(choice: Int?) {
         val r = round ?: return
-        val fact = r.question.fact
-        val ok = choice == fact.answer
-        progress.record(fact, ok)
+        val question = r.question
+        val ok = choice == question.answer
+        question.fact?.let { progress.record(it, ok) }
 
         // Ошибку повторяем через пару вопросов, но не больше половины тренировки.
         var questions = r.questions
         val repeats = questions.count { it.isRepeat }
         if (!ok && repeats < (questions.size - repeats) / 2) {
             val at = minOf(r.index + 3, questions.size)
-            val repeat = QuestionGenerator().question(fact, isRepeat = true)
+            val repeat = question.copy(options = question.options.shuffled(), isRepeat = true)
             questions = questions.toMutableList().apply { add(at, repeat) }
         }
 
@@ -176,7 +175,7 @@ class TrainerViewModel(app: Application) : AndroidViewModel(app) {
             answered = r.answered + 1,
             streak = streak,
             bestStreak = maxOf(r.bestStreak, streak),
-            mistakes = if (ok || r.mistakes.any { it.key == fact.key }) r.mistakes else r.mistakes + fact,
+            mistakes = if (ok || r.mistakes.any { it.key == question.key }) r.mistakes else r.mistakes + question,
         )
         job = viewModelScope.launch {
             delay(if (ok) 700 else 2200)

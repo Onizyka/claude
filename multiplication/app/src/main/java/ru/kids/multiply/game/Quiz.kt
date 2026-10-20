@@ -12,7 +12,7 @@ enum class Mode {
     /** Вся таблица от 2 до 10 вперемешку. */
     MIXED,
 
-    /** Квадраты чисел до 20 × 20 и трудные примеры до 12 × 12. */
+    /** Квадраты чисел до 20 × 20, трудные примеры до 12 × 12 и примеры со скобками. */
     HARD,
 
     /** Только примеры, в которых ребёнок ошибался. */
@@ -37,8 +37,20 @@ data class Fact(val a: Int, val b: Int) {
     }
 }
 
-/** Вопрос с вариантами ответа. [isRepeat] — повтор примера, в котором была ошибка. */
-data class Question(val fact: Fact, val options: List<Int>, val isRepeat: Boolean = false)
+/**
+ * Вопрос с вариантами ответа. [fact] есть у примеров из таблицы — по нему считается статистика ошибок.
+ * [isRepeat] — повтор примера, в котором была ошибка.
+ */
+data class Question(
+    val text: String,
+    val answer: Int,
+    val options: List<Int>,
+    val fact: Fact? = null,
+    val isRepeat: Boolean = false,
+) {
+    /** Ключ, по которому одинаковые примеры считаются одним. */
+    val key: String get() = fact?.key ?: text
+}
 
 /**
  * Составляет тренировку. [mistakes] — сколько раз ошибались в примере (по [Fact.key]):
@@ -49,22 +61,21 @@ class QuestionGenerator(
     private val mistakes: Map<String, Int> = emptyMap(),
 ) {
 
-    fun session(mode: Mode, table: Int, count: Int): List<Question> {
-        val facts = when (mode) {
-            Mode.TABLE -> deck(tableFacts(table), count)
-            Mode.MIXED -> weighted(mixedFacts(), count)
-            Mode.HARD -> hard(count)
-            Mode.MISTAKES -> weighted(mistakeFacts(), count)
-        }
-        val swapChance = if (mode == Mode.TABLE) 0.25 else 0.5
-        return facts.map { fact ->
-            val shown = if (random.nextDouble() < swapChance) Fact(fact.b, fact.a) else fact
-            question(shown)
-        }
+    fun session(mode: Mode, table: Int, count: Int): List<Question> = when (mode) {
+        Mode.TABLE -> deck(tableFacts(table), count).map { question(it, swapChance = 0.25) }
+        Mode.MIXED -> weighted(mixedFacts(), count).map { question(it) }
+        Mode.HARD -> hard(count)
+        Mode.MISTAKES -> weighted(mistakeFacts(), count).map { question(it) }
     }
 
-    fun question(fact: Fact, isRepeat: Boolean = false) =
-        Question(fact, options(fact), isRepeat)
+    /** Пример из таблицы; иногда множители переставлены, чтобы знать и 7 × 3, и 3 × 7. */
+    private fun question(fact: Fact, swapChance: Double = 0.5): Question {
+        val shown = if (random.nextDouble() < swapChance) Fact(fact.b, fact.a) else fact
+        return Question("${shown.a} × ${shown.b}", shown.answer, options(shown), fact = shown)
+    }
+
+    private fun question(expression: Expression) =
+        Question(expression.text, expression.answer, options(expression))
 
     /**
      * Три неверных варианта, похожих на правильный: соседние ответы из таблицы
@@ -76,12 +87,28 @@ class QuestionGenerator(
         val neighbours = listOf((a - 1) * b, (a + 1) * b, a * (b - 1), a * (b + 1))
         val others = listOf(answer + 1, answer - 1, answer + 10, answer - 10, a + b, swapDigits(answer))
 
-        fun usable(list: List<Int>) = list.filter { it > 0 && it != answer }.distinct().shuffled(random)
-
         val wrong = LinkedHashSet<Int>()
-        usable(neighbours).take(2).forEach { wrong += it }
-        usable(others).forEach { if (wrong.size < 3) wrong += it }
-        usable(neighbours).forEach { if (wrong.size < 3) wrong += it }
+        usable(neighbours, answer).take(2).forEach { wrong += it }
+        usable(others, answer).forEach { if (wrong.size < 3) wrong += it }
+        usable(neighbours, answer).forEach { if (wrong.size < 3) wrong += it }
+        return withAnswer(wrong, answer)
+    }
+
+    /** Для примера со скобками: ответ без учёта скобок, ±1, ±2, ±10, переставленные цифры. */
+    fun options(expression: Expression): List<Int> {
+        val answer = expression.answer
+        val wrong = LinkedHashSet<Int>()
+        usable(listOfNotNull(expression.withoutBrackets), answer).forEach { wrong += it }
+        val near = listOf(answer + 1, answer - 1, answer + 2, answer - 2, answer + 10, answer - 10, swapDigits(answer))
+        usable(near, answer).forEach { if (wrong.size < 3) wrong += it }
+        return withAnswer(wrong, answer)
+    }
+
+    private fun usable(list: List<Int>, answer: Int) =
+        list.filter { it > 0 && it != answer }.distinct().shuffled(random)
+
+    /** Добирает неверные варианты до трёх и перемешивает их с правильным ответом. */
+    private fun withAnswer(wrong: MutableSet<Int>, answer: Int): List<Int> {
         while (wrong.size < 3) {
             val candidate = answer + random.nextInt(-12, 13)
             if (candidate > 0 && candidate != answer) wrong += candidate
@@ -127,14 +154,25 @@ class QuestionGenerator(
         return pool.last()
     }
 
-    /** Половина — квадраты (большие чаще), половина — трудные примеры до 12 × 12. */
-    private fun hard(count: Int): List<Fact> {
+    /**
+     * 40 % — квадраты (большие чаще), 30 % — трудные примеры до 12 × 12,
+     * 30 % — примеры со скобками.
+     */
+    private fun hard(count: Int): List<Question> {
         val squares = weighted(squareFacts(), count) { if (it.a >= 10) 3 else 1 }
         val products = weighted(hardProducts(), count)
+        val expressions = ExpressionGenerator(random)
         var s = 0
         var p = 0
-        // Списки не пересекаются, поэтому одинаковых примеров подряд не будет.
-        return List(count) { if (random.nextBoolean()) squares[s++] else products[p++] }
+        // Квадраты, произведения и скобки не пересекаются, поэтому одинаковых примеров подряд не будет.
+        return List(count) {
+            val roll = random.nextInt(10)
+            when {
+                roll < 4 -> question(squares[s++])
+                roll < 7 -> question(products[p++])
+                else -> question(expressions.next())
+            }
+        }
     }
 
     private fun mistakeFacts(): List<Fact> =

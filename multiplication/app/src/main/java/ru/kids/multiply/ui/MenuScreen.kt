@@ -60,7 +60,7 @@ fun MenuScreen(vm: TrainerViewModel) {
         ) { vm.start(Mode.MIXED) }
         ModeButton(
             title = "Сложный уровень",
-            subtitle = "Квадраты 10 × 10, 11 × 11 … 20 × 20 и трудные примеры до 12 × 12",
+            subtitle = "Квадраты 10 × 10, 11 × 11 … 20 × 20, трудные примеры до 12 × 12 и примеры со скобками",
             color = Palette.Bad,
             stars = vm.stars(Mode.HARD),
         ) { vm.start(Mode.HARD) }

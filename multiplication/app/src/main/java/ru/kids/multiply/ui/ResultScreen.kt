@@ -65,7 +65,7 @@ fun ResultScreen(round: Round, onAgain: () -> Unit, onMenu: () -> Unit) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Запомни:", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Palette.Bad)
                     round.mistakes.forEach {
-                        Text("${it.a} × ${it.b} = ${it.answer}", fontSize = 26.sp)
+                        Text("${it.text} = ${it.answer}", fontSize = if (it.text.length > 13) 22.sp else 26.sp)
                     }
                 }
             }
