@@ -18,8 +18,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import ru.kids.multiply.BuildConfig
 import ru.kids.multiply.game.Mode
 
 @Composable
@@ -64,6 +66,12 @@ fun MenuScreen(vm: TrainerViewModel) {
             color = Palette.Bad,
             stars = vm.stars(Mode.HARD),
         ) { vm.start(Mode.HARD) }
+        ModeButton(
+            title = "Примеры со скобками",
+            subtitle = "(7 + 5) × 3,  56 : (3 + 4),  (42 − 18) : 6 — все четыре действия",
+            color = Palette.table(9),
+            stars = vm.stars(Mode.BRACKETS),
+        ) { vm.start(Mode.BRACKETS) }
         if (vm.mistakesCount > 0) {
             ModeButton(
                 title = "Работа над ошибками",
@@ -78,6 +86,14 @@ fun MenuScreen(vm: TrainerViewModel) {
         ChoiceRow(listOf(5, 8, 10, 15, 20), vm.seconds, { "$it с" }, vm::changeSeconds)
         Text("Примеров в тренировке", style = MaterialTheme.typography.titleMedium)
         ChoiceRow(listOf(10, 20, 30), vm.questionCount, { "$it" }, vm::changeQuestionCount)
+
+        Text(
+            text = "Версия ${BuildConfig.VERSION_NAME}",
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+            textAlign = TextAlign.Center,
+        )
     }
 }
 

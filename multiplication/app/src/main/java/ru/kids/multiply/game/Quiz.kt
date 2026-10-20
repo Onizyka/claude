@@ -17,6 +17,9 @@ enum class Mode {
 
     /** Только примеры, в которых ребёнок ошибался. */
     MISTAKES,
+
+    /** Только примеры со скобками на четыре действия. */
+    BRACKETS,
 }
 
 /** Пример «a × b». */
@@ -66,6 +69,7 @@ class QuestionGenerator(
         Mode.MIXED -> weighted(mixedFacts(), count).map { question(it) }
         Mode.HARD -> hard(count)
         Mode.MISTAKES -> weighted(mistakeFacts(), count).map { question(it) }
+        Mode.BRACKETS -> ExpressionGenerator(random).let { generator -> List(count) { question(generator.next()) } }
     }
 
     /** Пример из таблицы; иногда множители переставлены, чтобы знать и 7 × 3, и 3 × 7. */

@@ -89,4 +89,5 @@ fun modeTitle(mode: Mode, table: Int): String = when (mode) {
     Mode.MIXED -> "Всё вперемешку"
     Mode.HARD -> "Сложный уровень"
     Mode.MISTAKES -> "Работа над ошибками"
+    Mode.BRACKETS -> "Примеры со скобками"
 }

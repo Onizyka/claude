@@ -5,7 +5,7 @@ plugins {
 }
 
 /** Версия приложения: новая функция — средняя цифра, исправление — последняя. */
-val appVersion = "1.1.0"
+val appVersion = "1.2.0"
 
 /** 1.2.3 → 10203: код версии растёт вместе с номером. */
 fun versionCodeOf(version: String): Int {
@@ -58,6 +58,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

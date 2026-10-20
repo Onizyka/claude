@@ -70,6 +70,15 @@ class QuestionGeneratorTest {
     }
 
     @Test
+    fun bracketsModeHasOnlyBracketExamples() {
+        val questions = QuestionGenerator(Random(7)).session(Mode.BRACKETS, 0, 30)
+        assertEquals(30, questions.size)
+        assertTrue(questions.all { it.fact == null && '(' in it.text })
+        questions.forEach { assertEquals(it.text, evaluate(it.text), it.answer) }
+        questions.map { it.key }.zipWithNext().forEach { (x, y) -> assertNotEquals(x, y) }
+    }
+
+    @Test
     fun mistakesModeUsesOnlyMistakes() {
         val mistakes = mapOf("7x8" to 2, "6x9" to 4)
         val questions = QuestionGenerator(Random(5), mistakes).session(Mode.MISTAKES, 0, 6)
