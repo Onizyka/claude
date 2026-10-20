@@ -93,6 +93,22 @@ class QuestionGeneratorTest {
     }
 
     @Test
+    fun mistakesModeMixesTableAndBracketMistakes() {
+        val expression = Expression("(7 + 5) × 3", 36, 22)
+        val questions = QuestionGenerator(Random(9), mapOf("7x8" to 2), mapOf(expression to 2))
+            .session(Mode.MISTAKES, 0, 20)
+        assertEquals(20, questions.size)
+        assertTrue(questions.any { it.fact?.key == "7x8" })
+        val bracket = questions.filter { it.expression != null }
+        assertTrue(bracket.isNotEmpty())
+        bracket.forEach {
+            assertEquals("(7 + 5) × 3", it.text)
+            assertEquals(36, it.answer)
+            assertTrue(22 in it.options)
+        }
+    }
+
+    @Test
     fun factKeyIgnoresOrder() {
         assertEquals(Fact(8, 7).key, Fact(7, 8).key)
         assertEquals(Fact(7, 8), Fact.fromKey("7x8"))

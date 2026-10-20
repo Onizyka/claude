@@ -41,14 +41,15 @@ data class Fact(val a: Int, val b: Int) {
 }
 
 /**
- * Вопрос с вариантами ответа. [fact] есть у примеров из таблицы — по нему считается статистика ошибок.
- * [isRepeat] — повтор примера, в котором была ошибка.
+ * Вопрос с вариантами ответа. У примера из таблицы есть [fact], у примера со скобками — [expression]:
+ * по ним запоминаются ошибки. [isRepeat] — повтор примера, в котором была ошибка.
  */
 data class Question(
     val text: String,
     val answer: Int,
     val options: List<Int>,
     val fact: Fact? = null,
+    val expression: Expression? = null,
     val isRepeat: Boolean = false,
 ) {
     /** Ключ, по которому одинаковые примеры считаются одним. */
@@ -56,20 +57,30 @@ data class Question(
 }
 
 /**
- * Составляет тренировку. [mistakes] — сколько раз ошибались в примере (по [Fact.key]):
- * такие примеры попадаются чаще.
+ * Составляет тренировку. [mistakes] — сколько раз ошибались в примере из таблицы (по [Fact.key]),
+ * [expressionMistakes] — то же для примеров со скобками. Такие примеры попадаются чаще.
  */
 class QuestionGenerator(
     private val random: Random = Random.Default,
     private val mistakes: Map<String, Int> = emptyMap(),
+    private val expressionMistakes: Map<Expression, Int> = emptyMap(),
 ) {
 
     fun session(mode: Mode, table: Int, count: Int): List<Question> = when (mode) {
         Mode.TABLE -> deck(tableFacts(table), count).map { question(it, swapChance = 0.25) }
         Mode.MIXED -> weighted(mixedFacts(), count).map { question(it) }
         Mode.HARD -> hard(count)
-        Mode.MISTAKES -> weighted(mistakeFacts(), count).map { question(it) }
+        Mode.MISTAKES -> mistakesSession(count)
         Mode.BRACKETS -> ExpressionGenerator(random).let { generator -> List(count) { question(generator.next()) } }
+    }
+
+    private class MistakeItem(val key: String, val weight: Int, val make: () -> Question)
+
+    /** Работа над ошибками: примеры из таблицы и со скобками; где ошибок больше — те чаще. */
+    private fun mistakesSession(count: Int): List<Question> {
+        val facts = mistakeFacts().map { fact -> MistakeItem(fact.key, mistakes[fact.key] ?: 1) { question(fact) } }
+        val expressions = expressionMistakes.map { (e, weight) -> MistakeItem(e.text, weight) { question(e) } }
+        return weightedBy(facts + expressions, count, { it.key }) { 1 + 3 * it.weight }.map { it.make() }
     }
 
     /** Пример из таблицы; иногда множители переставлены, чтобы знать и 7 × 3, и 3 × 7. */
@@ -79,7 +90,7 @@ class QuestionGenerator(
     }
 
     private fun question(expression: Expression) =
-        Question(expression.text, expression.answer, options(expression))
+        Question(expression.text, expression.answer, options(expression), expression = expression)
 
     /**
      * Три неверных варианта, похожих на правильный: соседние ответы из таблицы
@@ -137,23 +148,26 @@ class QuestionGenerator(
     }
 
     /** Случайные примеры; где были ошибки — вероятность выше. Подряд один пример не повторяется. */
-    private fun weighted(pool: List<Fact>, count: Int, weight: (Fact) -> Int = { 1 }): List<Fact> {
+    private fun weighted(pool: List<Fact>, count: Int, weight: (Fact) -> Int = { 1 }): List<Fact> =
+        weightedBy(pool, count, { it.key }) { weight(it) * (1 + 3 * (mistakes[it.key] ?: 0)) }
+
+    private fun <T> weightedBy(pool: List<T>, count: Int, key: (T) -> String, weight: (T) -> Int): List<T> {
         if (pool.isEmpty()) return emptyList()
-        val result = mutableListOf<Fact>()
+        val result = mutableListOf<T>()
         repeat(count) {
-            val recent = result.takeLast(min(3, pool.size - 1)).map { it.key }.toSet()
-            val candidates = pool.filter { it.key !in recent }.ifEmpty { pool }
-            result += pick(candidates) { weight(it) * (1 + 3 * (mistakes[it.key] ?: 0)) }
+            val recent = result.takeLast(min(3, pool.size - 1)).map(key).toSet()
+            val candidates = pool.filter { key(it) !in recent }.ifEmpty { pool }
+            result += pick(candidates, weight)
         }
         return result
     }
 
-    private fun pick(pool: List<Fact>, weight: (Fact) -> Int): Fact {
+    private fun <T> pick(pool: List<T>, weight: (T) -> Int): T {
         val total = pool.sumOf(weight)
         var roll = random.nextInt(total)
-        for (fact in pool) {
-            roll -= weight(fact)
-            if (roll < 0) return fact
+        for (item in pool) {
+            roll -= weight(item)
+            if (roll < 0) return item
         }
         return pool.last()
     }

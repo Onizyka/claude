@@ -72,14 +72,19 @@ fun MenuScreen(vm: TrainerViewModel) {
             color = Palette.table(9),
             stars = vm.stars(Mode.BRACKETS),
         ) { vm.start(Mode.BRACKETS) }
-        if (vm.mistakesCount > 0) {
-            ModeButton(
-                title = "Работа над ошибками",
-                subtitle = "Трудных примеров: ${vm.mistakesCount}",
-                color = Palette.Orange,
-                stars = null,
-            ) { vm.start(Mode.MISTAKES) }
-        }
+        // Кнопка видна всегда; пока ошибок нет, она серая и объясняет, что здесь появится.
+        val hasMistakes = vm.mistakesCount > 0
+        ModeButton(
+            title = "Работа над ошибками",
+            subtitle = if (hasMistakes) {
+                "Примеров, где были ошибки: ${vm.mistakesCount}"
+            } else {
+                "Пока ошибок нет. Здесь соберутся примеры, в которых ты ошибёшься"
+            },
+            color = if (hasMistakes) Palette.Orange else Color(0xFFB8B5C4),
+            stars = null,
+            enabled = hasMistakes,
+        ) { vm.start(Mode.MISTAKES) }
 
         SectionTitle("Настройки")
         Text("Время на ответ", style = MaterialTheme.typography.titleMedium)
@@ -126,9 +131,17 @@ private fun TableCell(n: Int, stars: Int, modifier: Modifier, onClick: () -> Uni
 }
 
 @Composable
-private fun ModeButton(title: String, subtitle: String, color: Color, stars: Int?, onClick: () -> Unit) {
+private fun ModeButton(
+    title: String,
+    subtitle: String,
+    color: Color,
+    stars: Int?,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
     Surface(
         onClick = onClick,
+        enabled = enabled,
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
         color = color,

@@ -67,7 +67,7 @@ class TrainerViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var questionCount by mutableIntStateOf(progress.questionCount)
         private set
-    var mistakesCount by mutableIntStateOf(progress.mistakes().size)
+    var mistakesCount by mutableIntStateOf(progress.mistakesCount())
         private set
     private var stars by mutableStateOf(progress.allStars())
 
@@ -92,9 +92,13 @@ class TrainerViewModel(app: Application) : AndroidViewModel(app) {
 
     fun start(mode: Mode, table: Int = 0) {
         val mistakes = progress.mistakes()
+        val expressionMistakes = progress.expressionMistakes()
         // Если трудных примеров мало, тренировка короче, чтобы один пример не шёл по кругу.
-        val count = if (mode == Mode.MISTAKES) minOf(questionCount, mistakes.size * 3) else questionCount
-        val questions = QuestionGenerator(mistakes = mistakes).session(mode, table, count)
+        val count = if (mode == Mode.MISTAKES) {
+            minOf(questionCount, (mistakes.size + expressionMistakes.size) * 3)
+        } else questionCount
+        val questions = QuestionGenerator(mistakes = mistakes, expressionMistakes = expressionMistakes)
+            .session(mode, table, count)
         if (questions.isEmpty()) return
         round = Round(mode, table, questions, totalMs = seconds * 1000L)
         screen = Screen.Game
@@ -117,7 +121,7 @@ class TrainerViewModel(app: Application) : AndroidViewModel(app) {
         job?.cancel()
         paused = false
         round = null
-        mistakesCount = progress.mistakes().size
+        mistakesCount = progress.mistakesCount()
         screen = Screen.Menu
     }
 
@@ -155,7 +159,7 @@ class TrainerViewModel(app: Application) : AndroidViewModel(app) {
         val r = round ?: return
         val question = r.question
         val ok = choice == question.answer
-        question.fact?.let { progress.record(it, ok) }
+        progress.record(question, ok)
 
         // Ошибку повторяем через пару вопросов, но не больше половины тренировки.
         var questions = r.questions
@@ -191,7 +195,7 @@ class TrainerViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             progress.saveStars(r.mode, r.table, r.stars)
             stars = progress.allStars()
-            mistakesCount = progress.mistakes().size
+            mistakesCount = progress.mistakesCount()
             screen = Screen.Result
         }
     }
