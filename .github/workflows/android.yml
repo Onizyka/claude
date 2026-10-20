@@ -1,8 +1,15 @@
 name: Android build
 
 on:
+  # Тренажёр умножения собирается своим workflow (multiplication.yml).
   push:
+    paths-ignore:
+      - "multiplication/**"
+      - ".github/workflows/multiplication.yml"
   pull_request:
+    paths-ignore:
+      - "multiplication/**"
+      - ".github/workflows/multiplication.yml"
   workflow_dispatch:
 
 permissions:
