@@ -56,13 +56,13 @@ fun MenuScreen(vm: TrainerViewModel) {
         SectionTitle("Проверка")
         ModeButton(
             title = "Всё вперемешку",
-            subtitle = "Вся таблица от 2 до 10 в случайном порядке",
+            subtitle = "Простой уровень: вся таблица умножения в случайном порядке",
             color = MaterialTheme.colorScheme.primary,
             stars = vm.stars(Mode.MIXED),
         ) { vm.start(Mode.MIXED) }
         ModeButton(
             title = "Сложный уровень",
-            subtitle = "Квадраты 10 × 10, 11 × 11 … 20 × 20, трудные примеры до 12 × 12 и примеры со скобками",
+            subtitle = "Двузначные числа: 10 × 10, 11 × 11 … 20 × 20 и 12 × 15, 14 × 17",
             color = Palette.Bad,
             stars = vm.stars(Mode.HARD),
         ) { vm.start(Mode.HARD) }

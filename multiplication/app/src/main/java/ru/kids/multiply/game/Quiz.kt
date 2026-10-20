@@ -9,10 +9,10 @@ enum class Mode {
     /** Таблица на одно число: 7 × 1 … 7 × 10. */
     TABLE,
 
-    /** Вся таблица от 2 до 10 вперемешку. */
+    /** Простой уровень: вся таблица умножения вперемешку. */
     MIXED,
 
-    /** Квадраты чисел до 20 × 20, трудные примеры до 12 × 12 и примеры со скобками. */
+    /** Двузначные числа: квадраты 10 × 10 … 20 × 20 и произведения вроде 12 × 15. */
     HARD,
 
     /** Только примеры, в которых ребёнок ошибался. */
@@ -158,25 +158,14 @@ class QuestionGenerator(
         return pool.last()
     }
 
-    /**
-     * 40 % — квадраты (большие чаще), 30 % — трудные примеры до 12 × 12,
-     * 30 % — примеры со скобками.
-     */
+    /** Половина — квадраты двузначных чисел (10 × 10 … 20 × 20), половина — произведения двух разных двузначных. */
     private fun hard(count: Int): List<Question> {
-        val squares = weighted(squareFacts(), count) { if (it.a >= 10) 3 else 1 }
+        val squares = weighted(squareFacts(), count)
         val products = weighted(hardProducts(), count)
-        val expressions = ExpressionGenerator(random)
         var s = 0
         var p = 0
-        // Квадраты, произведения и скобки не пересекаются, поэтому одинаковых примеров подряд не будет.
-        return List(count) {
-            val roll = random.nextInt(10)
-            when {
-                roll < 4 -> question(squares[s++])
-                roll < 7 -> question(products[p++])
-                else -> question(expressions.next())
-            }
-        }
+        // Квадраты и произведения разных чисел не пересекаются, поэтому одинаковых примеров подряд не будет.
+        return List(count) { question(if (random.nextBoolean()) squares[s++] else products[p++]) }
     }
 
     private fun mistakeFacts(): List<Fact> =
@@ -187,9 +176,8 @@ class QuestionGenerator(
 
         fun mixedFacts() = (2..9).flatMap { a -> (a..10).map { b -> Fact(a, b) } }
 
-        fun squareFacts() = (2..20).map { Fact(it, it) }
+        fun squareFacts() = (10..20).map { Fact(it, it) }
 
-        fun hardProducts() = (3..12).flatMap { a -> (a + 1..12).map { b -> Fact(a, b) } }
-            .filter { it.b >= 6 }
+        fun hardProducts() = (10..20).flatMap { a -> (a + 1..20).map { b -> Fact(a, b) } }
     }
 }

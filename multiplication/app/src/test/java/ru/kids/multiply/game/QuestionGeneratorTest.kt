@@ -36,14 +36,20 @@ class QuestionGeneratorTest {
     }
 
     @Test
-    fun hardModeMixesSquaresProductsAndBrackets() {
+    fun hardModeHasOnlyTwoDigitNumbersAndManySquares() {
         val questions = QuestionGenerator(Random(4)).session(Mode.HARD, 0, 300)
-        val squares = questions.count { it.fact?.let { f -> f.a == f.b } == true }
-        val brackets = questions.count { it.fact == null }
-        assertTrue("квадратов: $squares", squares in 90..150)
-        assertTrue("со скобками: $brackets", brackets in 60..120)
-        assertTrue(questions.any { it.fact?.let { f -> f.a >= 13 && f.a == f.b } == true })
+        assertTrue("без скобок", questions.all { it.fact != null && '(' !in it.text })
+        assertTrue("только двузначные", questions.all { it.fact!!.a in 10..20 && it.fact!!.b in 10..20 })
+        val squares = questions.count { it.fact!!.a == it.fact!!.b }
+        assertTrue("квадратов: $squares", squares in 120..180)
+        assertTrue(questions.any { it.fact!!.a != it.fact!!.b })
         questions.forEach { assertGoodOptions(it.options, it.answer) }
+    }
+
+    @Test
+    fun mixedModeStaysInsideMultiplicationTable() {
+        val questions = QuestionGenerator(Random(8)).session(Mode.MIXED, 0, 300)
+        assertTrue(questions.all { it.fact!!.a in 1..10 && it.fact!!.b in 1..10 && '(' !in it.text })
     }
 
     @Test
